@@ -24,12 +24,13 @@ import (
 	arpcclient "pkg.akt.dev/go/node/client"
 	client "pkg.akt.dev/go/node/client/discovery"
 	cltypes "pkg.akt.dev/go/node/client/types"
-	clt "pkg.akt.dev/go/node/client/v1beta3"
+	cltb3 "pkg.akt.dev/go/node/client/v1beta3"
+	clt "pkg.akt.dev/go/node/client/v1beta4"
 	dv1 "pkg.akt.dev/go/node/deployment/v1"
-	dvbeta "pkg.akt.dev/go/node/deployment/v1beta4"
+	dvbeta "pkg.akt.dev/go/node/deployment/v1beta5"
 	ev1 "pkg.akt.dev/go/node/escrow/v1"
 	mv1 "pkg.akt.dev/go/node/market/v1"
-	mvbeta "pkg.akt.dev/go/node/market/v1beta5"
+	mvbeta "pkg.akt.dev/go/node/market/v2beta1"
 	"pkg.akt.dev/go/sdkutil"
 
 	akash "pkg.akt.dev/node/v2/app"
@@ -146,7 +147,9 @@ func (pu *postUpgrade) Run(ctx context.Context, t *testing.T, params uttypes.Tes
 	require.NoError(t, err)
 
 	// sending contract via gov with sender as the gov module account shall pass
-	resp, err = mcl.Tx().BroadcastMsgs(ctx, []sdk.Msg{govMsg}, clt.WithGas(cltypes.GasSetting{Simulate: true}))
+	// The broadcast machinery is version-agnostic and lives in v1beta3; the
+	// v1beta4 composite re-exports its option types.
+	resp, err = mcl.Tx().BroadcastMsgs(ctx, []sdk.Msg{govMsg}, cltb3.WithGas(cltypes.GasSetting{Simulate: true}))
 	require.NoError(t, err)
 	require.NotNil(t, resp)
 	require.IsType(t, &sdk.TxResponse{}, resp)
