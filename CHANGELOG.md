@@ -50,6 +50,7 @@ Ref: https://keepachangelog.com/en/1.0.0/
 * (x/deployment) AEP-87: volume-group gates in CreateDeployment (feature flag, params bounds, vid gate, adoption and replica validation) and ErrVolumeAttached on CloseDeployment/CloseGroup while attachments exist.
 * (x/market) AEP-87: volume attachment indexes (0x15/0x16) maintained in the keeper create/close routines; cascade-detach with reason substitution on every volume lease close path; rebuilt deterministically on genesis import.
 * (x/market) AEP-87: CreateBid volume gates (reclamation floor, storage-quantity equality, adoption-provider gate, colocation contract for attaching groups), CreateLease re-verification, tenant volume closes routed through the reclamation window, and the migrate/evict auto-re-order carve-out.
+* (upgrades) AEP-87: v2.2.0 upgrade handler. ConsensusVersion bumps: deployment 8 -> 9 (groups store re-encoded deployment/v1beta4 -> v1beta5) and market 9 -> 10 (orders/bids stores re-encoded market/v1beta5 -> v2beta1); both re-encodes are byte-identical (nullable-additive). Seeds the AEP-87 params (VolumeOrdersEnabled=false, MinVolumeReclamationWindow=24h, MaxVolumeSize=32Ti, MaxVolumeRetention=720h, MaxVolumeReplicas=4) and initializes the empty volume/attachment indexes (0x13/0x15/0x16). No store keys added or removed.
 
 ### Improvements
 
