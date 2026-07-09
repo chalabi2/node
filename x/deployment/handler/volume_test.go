@@ -356,6 +356,13 @@ func TestVolumeCloseWhileAttached(t *testing.T) {
 		require.True(t, errors.Is(err, v1.ErrVolumeAttached))
 	})
 
+	t.Run("pause group rejected", func(t *testing.T) {
+		// pausing closes the volume lease too, so it runs the same gate
+		res, err := vs.vhandler(vs.ctx, &dvbeta.MsgPauseGroup{ID: volumeGroupID(msg)})
+		require.Nil(t, res)
+		require.True(t, errors.Is(err, v1.ErrVolumeAttached))
+	})
+
 	t.Run("close passes once detached", func(t *testing.T) {
 		vs.market.attached[volumeGroupID(msg)] = false
 

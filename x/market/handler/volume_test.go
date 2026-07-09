@@ -773,6 +773,80 @@ func TestCloseDeployment_VolumeAttachedRejected(t *testing.T) {
 	require.Contains(t, err.Error(), "volume has attached leases")
 }
 
+func TestPauseGroup_VolumeRoutesThroughReclamation(t *testing.T) {
+	suite := setupTestSuite(t)
+	prepareBlanketMocks(suite)
+	suite.enableVolumeOrders()
+
+	providerAddr := testutil.AccAddress(t)
+	volLid, volBid, volOrder, _ := suite.createVolumeLease("pgdata", providerAddr, 24*time.Hour)
+	volGid := volOrder.ID.GroupID()
+	suite.setupLeaseEscrow(volBid, volOrder)
+
+	blockTime := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
+	suite.SetBlockHeight(100)
+	ctx := suite.Context().WithBlockTime(blockTime)
+
+	// First pause starts reclamation and leaves the group open — a pause
+	// closes the volume lease just like a close, so the window applies.
+	_, err := suite.dhandler(ctx, &dtypes.MsgPauseGroup{ID: volGid})
+	require.NoError(t, err)
+
+	group, found := suite.DeploymentKeeper().GetGroup(suite.Context(), volGid)
+	require.True(t, found)
+	assert.Equal(t, dtypes.GroupOpen, group.State)
+
+	lease, found := suite.MarketKeeper().GetLease(suite.Context(), volLid)
+	require.True(t, found)
+	require.Equal(t, mv1.LeaseReclaiming, lease.State)
+	assert.Equal(t, mv1.LeaseClosedReasonVolumeClosedRetain, lease.Reclamation.Reason)
+
+	// Inside the window the pause is refused.
+	early := suite.Context().WithBlockTime(blockTime.Add(time.Hour))
+	_, err = suite.dhandler(early, &dtypes.MsgPauseGroup{ID: volGid})
+	require.ErrorIs(t, err, mv1.ErrReclamationWindowNotElapsed)
+
+	// After the deadline the pause completes: the group pauses and the
+	// lease closes with the substituted retain reason, anchoring retention
+	// at this block's wall clock.
+	lateTime := blockTime.Add(25 * time.Hour)
+	late := suite.Context().WithBlockTime(lateTime)
+	_, err = suite.dhandler(late, &dtypes.MsgPauseGroup{ID: volGid})
+	require.NoError(t, err)
+
+	group, found = suite.DeploymentKeeper().GetGroup(suite.Context(), volGid)
+	require.True(t, found)
+	assert.Equal(t, dtypes.GroupPaused, group.State)
+
+	lease, found = suite.MarketKeeper().GetLease(suite.Context(), volLid)
+	require.True(t, found)
+	assert.Equal(t, mv1.LeaseClosed, lease.State)
+	assert.Equal(t, mv1.LeaseClosedReasonVolumeClosedRetain, lease.Reason)
+	assert.Equal(t, lateTime.Unix(), lease.ClosedAt)
+
+	// The pause-close is the retention anchor the vid gate and adoption
+	// validation read.
+	closedAt, ok := suite.MarketKeeper().LastVolumeLeaseClosedAt(suite.Context(), volGid)
+	require.True(t, ok)
+	assert.Equal(t, lateTime.Unix(), closedAt.Unix())
+}
+
+func TestPauseGroup_VolumeAttachedRejected(t *testing.T) {
+	suite := setupTestSuite(t)
+	prepareBlanketMocks(suite)
+	suite.enableVolumeOrders()
+
+	providerAddr := testutil.AccAddress(t)
+	_, volBid, volOrder, _ := suite.createVolumeLease("pgdata", providerAddr, 24*time.Hour)
+	suite.setupLeaseEscrow(volBid, volOrder)
+
+	suite.attachCompute(volOrder, providerAddr)
+
+	_, err := suite.dhandler(suite.Context(), &dtypes.MsgPauseGroup{ID: volOrder.ID.GroupID()})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "volume has attached leases")
+}
+
 // ===========================
 // Retention anchor
 // ===========================

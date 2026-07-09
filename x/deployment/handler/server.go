@@ -271,6 +271,28 @@ func (ms msgServer) PauseGroup(goCtx context.Context, msg *types.MsgPauseGroup) 
 		return nil, err
 	}
 
+	// Pausing a volume group closes its lease just like a close does, so it
+	// runs the same AEP-87 gates: attached compute detaches first, and no
+	// volume lease terminates without its reclamation window — the first
+	// pause starts the window (the group stays open), the pause completes at
+	// msg time after the deadline. The paused group stays live for the vid
+	// gate (no re-mint, no adoption), and the retention window anchors on
+	// this pause-close: the provider's retain obligation runs from when its
+	// lease closed, whether the group is later closed or restarted.
+	if group.GroupSpec.Volume != nil {
+		if ms.market.HasAttachments(ctx, group.ID) {
+			return nil, v1.ErrVolumeAttached.Wrapf("volume group %s", group.ID)
+		}
+
+		proceed, err := ms.market.ReclaimVolumeOnClose(ctx, group.ID, mv1.LeaseClosedReasonVolumeClosedRetain)
+		if err != nil {
+			return nil, err
+		}
+		if !proceed {
+			return &types.MsgPauseGroupResponse{}, nil
+		}
+	}
+
 	// Update the Group's state
 	err = ms.deployment.OnPauseGroup(ctx, group)
 	if err != nil {
