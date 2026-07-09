@@ -40,6 +40,10 @@ Ref: https://keepachangelog.com/en/1.0.0/
 
 * (ibc-go) Use ibc v4.4.0 https://pkg.akt.dev/node/pull/1825
 
+### Features
+
+* (x/escrow) AEP-87: EventAccountRunway emitted at the end of every account settle with open payments: projected depletion height = current + floor(funds / sum of open payment rates), 0 when funds cover no full block. Additive typed event, no state change.
+
 ### State Machine Breaking
 
 * (x/deployment) AEP-87: vid index (owner, vid -> GroupID) and replica backref counters in the deployment store; rebuilt deterministically on genesis import.
@@ -53,4 +57,5 @@ Ref: https://keepachangelog.com/en/1.0.0/
 
 ### Bug Fixes
 
+* (x/market) AEP-87: OnEscrowAccountClosed ignores escrow accounts from foreign scopes instead of returning an error; a hook error aborts saveAccount mid-write. Bid-escrow account closes are proven byte-identical across the fix by regression tests.
 * Fix bug in ditribution and querying rewards
