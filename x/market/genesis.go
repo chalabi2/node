@@ -78,6 +78,13 @@ func InitGenesis(ctx sdk.Context, kpr keeper.IKeeper, data *mvbeta.GenesisState)
 		}
 	}
 
+	// The AEP-87 volume attachment indexes are a pure function of the live
+	// leases and their orders' group specs; rebuild them instead of carrying
+	// them in the genesis document.
+	if err := kpr.RebuildAttachmentIndexes(ctx); err != nil {
+		panic(fmt.Errorf("market genesis init. attachment indexes: %w", err))
+	}
+
 	err := kpr.SetParams(ctx, data.Params)
 	if err != nil {
 		panic(err)

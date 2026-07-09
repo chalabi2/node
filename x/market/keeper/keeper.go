@@ -52,6 +52,12 @@ type IKeeper interface {
 	SaveLease(ctx sdk.Context, lease mv1.Lease) error
 	VolumeOrdersEnabled(ctx sdk.Context) bool
 	HasAttachments(ctx sdk.Context, id dtypes.GroupID) bool
+	AttachmentCount(ctx sdk.Context, id dtypes.GroupID) uint32
+	WithAttachments(ctx sdk.Context, id dtypes.GroupID, fn func(mv1.LeaseID) bool)
+	VolumeLease(ctx sdk.Context, id dtypes.GroupID) (mv1.Lease, bool)
+	LastClosedVolumeLeaseProvider(ctx sdk.Context, id dtypes.GroupID) (string, bool)
+	ReclaimVolumeOnClose(ctx sdk.Context, id dtypes.GroupID, reason mv1.LeaseClosedReason) (bool, error)
+	RebuildAttachmentIndexes(ctx sdk.Context) error
 	LastVolumeLeaseClosedAt(ctx sdk.Context, id dtypes.GroupID) (time.Time, bool)
 }
 
@@ -69,6 +75,13 @@ type Keeper struct {
 	orders *collections.IndexedMap[keys.OrderPrimaryKey, types.Order, OrderIndexes]
 	leases *collections.IndexedMap[keys.LeasePrimaryKey, mv1.Lease, LeaseIndexes]
 	Params collections.Item[types.Params]
+
+	// AEP-87 volume attachment indexes: which compute leases mount which
+	// volume groups. Written/pruned ONLY inside the keeper create/close
+	// routines (never handlers) so every close path — tenant, provider,
+	// escrow cascade — maintains them.
+	attachments    collections.KeySet[keys.AttachmentKey]
+	attachmentsRev collections.KeySet[keys.AttachmentRevKey]
 }
 
 // NewKeeper creates and returns an instance for Market keeper
@@ -85,21 +98,26 @@ func NewKeeper(cdc codec.BinaryCodec, skey *storetypes.KVStoreKey, ekeeper Escro
 	leases := collections.NewIndexedMap(sb, collections.NewPrefix(keys.LeasePrefixNew), "leases", keys.LeasePrimaryKeyCodec, codec.CollValue[mv1.Lease](cdc), leaseIndexes)
 	params := collections.NewItem(sb, keys.ParamsPrefix, "params", codec.CollValue[types.Params](cdc))
 
+	attachments := collections.NewKeySet(sb, collections.NewPrefix(keys.AttachmentsPrefix), "attachments", keys.AttachmentKeyCodec)
+	attachmentsRev := collections.NewKeySet(sb, collections.NewPrefix(keys.AttachmentsRevPrefix), "attachments_rev", keys.AttachmentRevKeyCodec)
+
 	schema, err := sb.Build()
 	if err != nil {
 		panic(err)
 	}
 
 	res := &Keeper{
-		skey:      skey,
-		cdc:       cdc,
-		ekeeper:   ekeeper,
-		authority: authority,
-		schema:    schema,
-		bids:      bids,
-		orders:    orders,
-		leases:    leases,
-		Params:    params,
+		skey:           skey,
+		cdc:            cdc,
+		ekeeper:        ekeeper,
+		authority:      authority,
+		schema:         schema,
+		bids:           bids,
+		orders:         orders,
+		leases:         leases,
+		Params:         params,
+		attachments:    attachments,
+		attachmentsRev: attachmentsRev,
 	}
 
 	return res
@@ -275,6 +293,12 @@ func (k Keeper) CreateLease(ctx sdk.Context, bid types.Bid) error {
 		return err
 	}
 
+	// AEP-87: an attaching-group lease registers in the volume attachment
+	// index at the single keeper create point.
+	if err := k.attachVolumesOnLeaseCreate(ctx, lease.ID); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -348,11 +372,28 @@ func (k Keeper) OnOrderClosed(ctx sdk.Context, order types.Order) error {
 	return nil
 }
 
-// OnLeaseClosed updates lease state to closed
+// OnLeaseClosed updates lease state to closed. It is the single point every
+// close path — tenant, provider, escrow cascade — funnels through, so the
+// AEP-87 volume attachment index is maintained here: a closing volume lease
+// first cascade-detaches its attached compute leases and records the
+// substituted volume close reason; a closing compute lease prunes its own
+// attachment entries and emits EventVolumeDetached.
 func (k Keeper) OnLeaseClosed(ctx sdk.Context, lease mv1.Lease, state mv1.Lease_State, reason mv1.LeaseClosedReason) error {
 	switch lease.State {
 	case mv1.LeaseClosed, mv1.LeaseInsufficientFunds:
 		return nil
+	}
+
+	var spec *dvbeta.GroupSpec
+	if order, found := k.GetOrder(ctx, lease.ID.OrderID()); found {
+		spec = &order.Spec
+	}
+
+	if spec != nil && spec.Volume != nil {
+		reason = volumeLeaseCloseReason(lease, state, reason)
+		if err := k.cascadeDetach(ctx, lease.ID.GroupID()); err != nil {
+			return err
+		}
 	}
 
 	lease.State = state
@@ -372,6 +413,12 @@ func (k Keeper) OnLeaseClosed(ctx sdk.Context, lease mv1.Lease, state mv1.Lease_
 	)
 	if err != nil {
 		return err
+	}
+
+	if spec != nil && spec.Volume == nil {
+		if err := k.detachOnLeaseClose(ctx, lease, *spec, reason); err != nil {
+			return err
+		}
 	}
 
 	return nil
