@@ -106,7 +106,7 @@ func TestVolumeCreateFlagGated(t *testing.T) {
 
 	res, err := vs.vhandler(vs.ctx, msg)
 	require.Nil(t, res)
-	require.True(t, errors.Is(err, handler.ErrVolumeOrdersDisabled))
+	require.True(t, errors.Is(err, v1.ErrVolumeOrdersDisabled))
 
 	// flipping the flag frees the same message
 	vs.market.enabled = true
@@ -141,7 +141,7 @@ func TestVolumeVidUniqueness(t *testing.T) {
 		second := vs.createVolumeMsg(t, "pg-data")
 		res, err := vs.vhandler(vs.ctx, second)
 		require.Nil(t, res)
-		require.True(t, errors.Is(err, handler.ErrVidInUse))
+		require.True(t, errors.Is(err, v1.ErrVidInUse))
 	})
 
 	t.Run("same vid under another owner allowed", func(t *testing.T) {
@@ -179,7 +179,7 @@ func TestVolumeVidRetainedAndAdoption(t *testing.T) {
 		msg := vs.createVolumeMsg(t, "pg-data")
 		res, err := vs.vhandler(vs.ctx, msg)
 		require.Nil(t, res)
-		require.True(t, errors.Is(err, handler.ErrVidRetained))
+		require.True(t, errors.Is(err, v1.ErrVidRetained))
 	})
 
 	t.Run("adoption naming the retained volume passes", func(t *testing.T) {
@@ -225,7 +225,7 @@ func TestVolumeVidExpiredWindow(t *testing.T) {
 
 		res, err := vs.vhandler(expired, msg)
 		require.Nil(t, res)
-		require.True(t, errors.Is(err, handler.ErrInvalidVolumeAdoption))
+		require.True(t, errors.Is(err, v1.ErrInvalidVolumeAdoption))
 	})
 
 	t.Run("fresh create after expiry allowed", func(t *testing.T) {
@@ -251,7 +251,7 @@ func TestVolumeAdoptionInvalidTargets(t *testing.T) {
 		require.Nil(t, res)
 		// the target is live, so both the vid gate and adoption reject;
 		// adoption validation trips on the vid mismatch/live state
-		require.True(t, errors.Is(err, handler.ErrInvalidVolumeAdoption))
+		require.True(t, errors.Is(err, v1.ErrInvalidVolumeAdoption))
 	})
 
 	t.Run("adopting a missing volume rejected", func(t *testing.T) {
@@ -262,7 +262,7 @@ func TestVolumeAdoptionInvalidTargets(t *testing.T) {
 
 		res, err := vs.vhandler(vs.ctx, msg)
 		require.Nil(t, res)
-		require.True(t, errors.Is(err, handler.ErrInvalidVolumeAdoption))
+		require.True(t, errors.Is(err, v1.ErrInvalidVolumeAdoption))
 	})
 
 	t.Run("adoption without a closed lease rejected", func(t *testing.T) {
@@ -278,7 +278,7 @@ func TestVolumeAdoptionInvalidTargets(t *testing.T) {
 
 		res, err := vs.vhandler(vs.ctx, msg)
 		require.Nil(t, res)
-		require.True(t, errors.Is(err, handler.ErrInvalidVolumeAdoption))
+		require.True(t, errors.Is(err, v1.ErrInvalidVolumeAdoption))
 	})
 }
 
@@ -306,7 +306,7 @@ func TestVolumeReplicaBounds(t *testing.T) {
 
 		res, err := vs.vhandler(vs.ctx, second)
 		require.Nil(t, res)
-		require.True(t, errors.Is(err, handler.ErrInvalidVolumeReplica))
+		require.True(t, errors.Is(err, v1.ErrInvalidVolumeReplica))
 	})
 
 	t.Run("closing the replica frees the slot", func(t *testing.T) {
@@ -331,7 +331,7 @@ func TestVolumeReplicaBounds(t *testing.T) {
 
 		res, err := vs.vhandler(vs.ctx, msg)
 		require.Nil(t, res)
-		require.True(t, errors.Is(err, handler.ErrInvalidVolumeReplica))
+		require.True(t, errors.Is(err, v1.ErrInvalidVolumeReplica))
 	})
 }
 
@@ -347,13 +347,13 @@ func TestVolumeCloseWhileAttached(t *testing.T) {
 	t.Run("close deployment rejected", func(t *testing.T) {
 		res, err := vs.vhandler(vs.ctx, &dvbeta.MsgCloseDeployment{ID: msg.ID})
 		require.Nil(t, res)
-		require.True(t, errors.Is(err, handler.ErrVolumeAttached))
+		require.True(t, errors.Is(err, v1.ErrVolumeAttached))
 	})
 
 	t.Run("close group rejected", func(t *testing.T) {
 		res, err := vs.vhandler(vs.ctx, &dvbeta.MsgCloseGroup{ID: volumeGroupID(msg)})
 		require.Nil(t, res)
-		require.True(t, errors.Is(err, handler.ErrVolumeAttached))
+		require.True(t, errors.Is(err, v1.ErrVolumeAttached))
 	})
 
 	t.Run("close passes once detached", func(t *testing.T) {

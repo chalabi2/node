@@ -358,7 +358,7 @@ func TestStorageMarketE2E_FlagGating(t *testing.T) {
 	// Volume create is rejected while the governance flag ships off.
 	res, err := s.dhandler(s.Context(), msg)
 	require.Nil(t, res)
-	require.ErrorIs(t, err, dhandler.ErrVolumeOrdersDisabled)
+	require.ErrorIs(t, err, dv1.ErrVolumeOrdersDisabled)
 
 	// The param flip frees the very same message.
 	s.enableVolumeOrders()
@@ -456,7 +456,7 @@ func TestStorageMarketE2E_VidGates(t *testing.T) {
 	t.Run("same owner same vid rejected while live", func(t *testing.T) {
 		msg := s.volumeCreateMsg(owner, "pg-data", s.defaultDeposit())
 		_, err := s.dhandler(s.Context(), msg)
-		require.ErrorIs(t, err, dhandler.ErrVidInUse)
+		require.ErrorIs(t, err, dv1.ErrVidInUse)
 	})
 
 	t.Run("same vid under another owner allowed", func(t *testing.T) {
@@ -473,16 +473,16 @@ func TestStorageMarketE2E_VidGates(t *testing.T) {
 	require.NoError(t, err)
 
 	t.Run("adoption rejected without a closed-lease retention anchor", func(t *testing.T) {
-		// The real market keeper has no closed_at wall-clock anchor yet
-		// (market/v1 Lease carries only the closed_on height — see the
-		// LastVolumeLeaseClosedAt TODO), so adoption validation rejects
-		// and dead vids behave as expired rather than retained.
+		// The first volume died without ever holding a lease, so no
+		// provider retains its data: there is no closed lease to anchor a
+		// retention window, adoption has nothing to adopt from, and the
+		// dead vid behaves as expired rather than retained.
 		msg := s.volumeCreateMsg(owner, "pg-data", s.defaultDeposit())
 		adoptRef := smVolumeRef(firstOrder)
 		msg.Groups[0].Volume.Adopt = &adoptRef
 
 		_, err := s.dhandler(s.Context(), msg)
-		require.ErrorIs(t, err, dhandler.ErrInvalidVolumeAdoption)
+		require.ErrorIs(t, err, dv1.ErrInvalidVolumeAdoption)
 	})
 
 	t.Run("dead vid is re-mintable and the index moves", func(t *testing.T) {
@@ -582,7 +582,7 @@ func TestStorageMarketE2E_CascadeDetachThroughReclamation(t *testing.T) {
 
 	// While attached, the tenant cannot close the volume deployment.
 	_, err = s.dhandler(s.Context(), &dvbeta.MsgCloseDeployment{ID: volOrder.ID.GroupID().DeploymentID()})
-	require.ErrorIs(t, err, dhandler.ErrVolumeAttached)
+	require.ErrorIs(t, err, dv1.ErrVolumeAttached)
 
 	blockTime := time.Date(2026, 7, 8, 12, 0, 0, 0, time.UTC)
 	ctx := s.Context().WithBlockTime(blockTime)

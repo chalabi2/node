@@ -191,7 +191,7 @@ func (ms msgServer) CloseDeployment(goCtx context.Context, msg *types.MsgCloseDe
 		}
 
 		if ms.market.HasAttachments(ctx, group.ID) {
-			return &types.MsgCloseDeploymentResponse{}, ErrVolumeAttached.Wrapf("volume group %s", group.ID)
+			return &types.MsgCloseDeploymentResponse{}, v1.ErrVolumeAttached.Wrapf("volume group %s", group.ID)
 		}
 
 		// A tenant volume close routes through the reclamation window: the
@@ -233,7 +233,7 @@ func (ms msgServer) CloseGroup(goCtx context.Context, msg *types.MsgCloseGroup) 
 	// tenant; compute closes first.
 	if group.GroupSpec.Volume != nil {
 		if ms.market.HasAttachments(ctx, group.ID) {
-			return nil, ErrVolumeAttached.Wrapf("volume group %s", group.ID)
+			return nil, v1.ErrVolumeAttached.Wrapf("volume group %s", group.ID)
 		}
 
 		// A tenant volume close routes through the reclamation window; see
@@ -320,7 +320,7 @@ func (ms msgServer) validateVolumeCreate(ctx sdk.Context, msg *types.MsgCreateDe
 
 	// 1. Feature flag: volume orders are governance-gated.
 	if !ms.market.VolumeOrdersEnabled(ctx) {
-		return ErrVolumeOrdersDisabled
+		return v1.ErrVolumeOrdersDisabled
 	}
 
 	// Governance-bounded limits (size, retention, replicas) live in module
@@ -336,7 +336,7 @@ func (ms msgServer) validateVolumeCreate(ctx sdk.Context, msg *types.MsgCreateDe
 	if gid, found := ms.deployment.GetVolumeByVid(ctx, msg.ID.Owner, vol.Vid); found {
 		if prev, ok := ms.deployment.GetGroup(ctx, gid); ok {
 			if groupLive(prev) {
-				return ErrVidInUse.Wrapf("vid %q held by volume group %s", vol.Vid, gid)
+				return v1.ErrVidInUse.Wrapf("vid %q held by volume group %s", vol.Vid, gid)
 			}
 
 			if closedAt, ok := ms.market.LastVolumeLeaseClosedAt(ctx, gid); ok {
@@ -344,7 +344,7 @@ func (ms msgServer) validateVolumeCreate(ctx sdk.Context, msg *types.MsgCreateDe
 				retained := ctx.BlockTime().Before(retainedUntil)
 				adopted := vol.Adopt != nil && vol.Adopt.GroupID().Equals(gid)
 				if retained && !adopted {
-					return ErrVidRetained.Wrapf("vid %q retained by dead volume group %s until %s", vol.Vid, gid, retainedUntil)
+					return v1.ErrVidRetained.Wrapf("vid %q retained by dead volume group %s until %s", vol.Vid, gid, retainedUntil)
 				}
 			}
 		}
@@ -355,30 +355,30 @@ func (ms msgServer) validateVolumeCreate(ctx sdk.Context, msg *types.MsgCreateDe
 	if adopt := vol.Adopt; adopt != nil {
 		target, ok := ms.deployment.GetGroup(ctx, adopt.GroupID())
 		if !ok {
-			return ErrInvalidVolumeAdoption.Wrapf("volume group %s not found", adopt.GroupID())
+			return v1.ErrInvalidVolumeAdoption.Wrapf("volume group %s not found", adopt.GroupID())
 		}
 		tvol := target.GroupSpec.Volume
 		if tvol == nil {
-			return ErrInvalidVolumeAdoption.Wrapf("group %s is not a volume group", adopt.GroupID())
+			return v1.ErrInvalidVolumeAdoption.Wrapf("group %s is not a volume group", adopt.GroupID())
 		}
 		if adopt.Owner != msg.ID.Owner {
-			return ErrInvalidVolumeAdoption.Wrap("owner mismatch")
+			return v1.ErrInvalidVolumeAdoption.Wrap("owner mismatch")
 		}
 		if groupLive(target) {
-			return ErrInvalidVolumeAdoption.Wrapf("volume group %s is not closed", adopt.GroupID())
+			return v1.ErrInvalidVolumeAdoption.Wrapf("volume group %s is not closed", adopt.GroupID())
 		}
 		if tvol.Vid != vol.Vid {
-			return ErrInvalidVolumeAdoption.Wrapf("vid mismatch: %q != %q", vol.Vid, tvol.Vid)
+			return v1.ErrInvalidVolumeAdoption.Wrapf("vid mismatch: %q != %q", vol.Vid, tvol.Vid)
 		}
 		if name := volumeStorageName(target); name != adopt.Name {
-			return ErrInvalidVolumeAdoption.Wrapf("volume name mismatch: %q != %q", adopt.Name, name)
+			return v1.ErrInvalidVolumeAdoption.Wrapf("volume name mismatch: %q != %q", adopt.Name, name)
 		}
 		closedAt, ok := ms.market.LastVolumeLeaseClosedAt(ctx, adopt.GroupID())
 		if !ok {
-			return ErrInvalidVolumeAdoption.Wrapf("volume group %s has no closed lease to adopt from", adopt.GroupID())
+			return v1.ErrInvalidVolumeAdoption.Wrapf("volume group %s has no closed lease to adopt from", adopt.GroupID())
 		}
 		if !ctx.BlockTime().Before(closedAt.Add(tvol.Retention)) {
-			return ErrInvalidVolumeAdoption.Wrapf("retention window expired at %s", closedAt.Add(tvol.Retention))
+			return v1.ErrInvalidVolumeAdoption.Wrapf("retention window expired at %s", closedAt.Add(tvol.Retention))
 		}
 	}
 
@@ -387,23 +387,23 @@ func (ms msgServer) validateVolumeCreate(ctx sdk.Context, msg *types.MsgCreateDe
 	if rep := vol.ReplicaOf; rep != nil {
 		target, ok := ms.deployment.GetGroup(ctx, rep.GroupID())
 		if !ok {
-			return ErrInvalidVolumeReplica.Wrapf("volume group %s not found", rep.GroupID())
+			return v1.ErrInvalidVolumeReplica.Wrapf("volume group %s not found", rep.GroupID())
 		}
 		tvol := target.GroupSpec.Volume
 		if tvol == nil {
-			return ErrInvalidVolumeReplica.Wrapf("group %s is not a volume group", rep.GroupID())
+			return v1.ErrInvalidVolumeReplica.Wrapf("group %s is not a volume group", rep.GroupID())
 		}
 		if rep.Owner != msg.ID.Owner {
-			return ErrInvalidVolumeReplica.Wrap("owner mismatch")
+			return v1.ErrInvalidVolumeReplica.Wrap("owner mismatch")
 		}
 		if !groupLive(target) {
-			return ErrInvalidVolumeReplica.Wrapf("volume group %s is not live", rep.GroupID())
+			return v1.ErrInvalidVolumeReplica.Wrapf("volume group %s is not live", rep.GroupID())
 		}
 		if name := volumeStorageName(target); name != rep.Name {
-			return ErrInvalidVolumeReplica.Wrapf("volume name mismatch: %q != %q", rep.Name, name)
+			return v1.ErrInvalidVolumeReplica.Wrapf("volume name mismatch: %q != %q", rep.Name, name)
 		}
 		if count := ms.deployment.GetVolumeReplicaCount(ctx, rep.GroupID()); count >= uint64(tvol.MaxReplicas) {
-			return ErrInvalidVolumeReplica.Wrapf("volume group %s max_replicas (%d) reached", rep.GroupID(), tvol.MaxReplicas)
+			return v1.ErrInvalidVolumeReplica.Wrapf("volume group %s max_replicas (%d) reached", rep.GroupID(), tvol.MaxReplicas)
 		}
 	}
 
