@@ -36,6 +36,9 @@ type IKeeper interface {
 	WithDeployments(ctx sdk.Context, fn func(v1.Deployment) bool) error
 	OnBidClosed(ctx sdk.Context, id v1.GroupID) error
 	OnLeaseClosed(ctx sdk.Context, id v1.GroupID) (types.Group, error)
+	GetVolumeByVid(ctx sdk.Context, owner, vid string) (v1.GroupID, bool)
+	GetVolumeReplicaCount(ctx sdk.Context, id v1.GroupID) uint64
+	RebuildVolumeIndexes(ctx sdk.Context) error
 	GetParams(ctx sdk.Context) (types.Params, error)
 	SetParams(ctx sdk.Context, params types.Params) error
 	GetAuthority() string
@@ -62,6 +65,8 @@ type Keeper struct {
 	deployments            *collections.IndexedMap[keys.DeploymentPrimaryKey, v1.Deployment, DeploymentIndexes]
 	groups                 *collections.IndexedMap[keys.GroupPrimaryKey, types.Group, GroupIndexes]
 	pendingDenomMigrations collections.Map[keys.DeploymentPrimaryKey, sdkmath.Int]
+	volumesByVid           collections.Map[keys.VolumeVidKey, v1.GroupID]
+	volumeReplicaCounts    collections.Map[keys.GroupPrimaryKey, uint64]
 	Params                 collections.Item[types.Params]
 }
 
@@ -85,6 +90,8 @@ func NewKeeper(
 	deployments := collections.NewIndexedMap(sb, collections.NewPrefix(keys.DeploymentPrefix), "deployments", keys.DeploymentPrimaryKeyCodec, codec.CollValue[v1.Deployment](cdc), deploymentIndexes)
 	groups := collections.NewIndexedMap(sb, collections.NewPrefix(keys.GroupPrefix), "groups", keys.GroupPrimaryKeyCodec, codec.CollValue[types.Group](cdc), groupIndexes)
 	pendingDenomMigrations := collections.NewMap(sb, collections.NewPrefix(keys.PendingDenomMigrationPrefix), "pending_denom_migrations", keys.DeploymentPrimaryKeyCodec, sdk.IntValue)
+	volumesByVid := collections.NewMap(sb, collections.NewPrefix(keys.VolumeVidPrefix), "volumes_by_vid", keys.VolumeVidKeyCodec, codec.CollValue[v1.GroupID](cdc))
+	volumeReplicaCounts := collections.NewMap(sb, collections.NewPrefix(keys.VolumeReplicaCountPrefix), "volume_replica_counts", keys.GroupPrimaryKeyCodec, collections.Uint64Value)
 	params := collections.NewItem(sb, keys.ParamsKey, "params", codec.CollValue[types.Params](cdc))
 
 	schema, err := sb.Build()
@@ -105,6 +112,8 @@ func NewKeeper(
 		deployments:            deployments,
 		groups:                 groups,
 		pendingDenomMigrations: pendingDenomMigrations,
+		volumesByVid:           volumesByVid,
+		volumeReplicaCounts:    volumeReplicaCounts,
 		Params:                 params,
 	}
 }
@@ -223,6 +232,10 @@ func (k Keeper) Create(ctx sdk.Context, deployment v1.Deployment, groups []types
 		if err := k.groups.Set(ctx, gpk, group); err != nil {
 			return fmt.Errorf("failed to create group: %w", err)
 		}
+
+		if err := k.onVolumeGroupCreated(ctx, group); err != nil {
+			return err
+		}
 	}
 
 	err = ctx.EventManager().EmitTypedEvent(
@@ -310,6 +323,10 @@ func (k Keeper) OnCloseGroup(ctx sdk.Context, group types.Group, state types.Gro
 	}
 	if !has {
 		return v1.ErrGroupNotFound
+	}
+
+	if err := k.onVolumeGroupClosed(ctx, group); err != nil {
+		return err
 	}
 
 	group.State = state
