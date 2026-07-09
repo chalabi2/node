@@ -257,6 +257,11 @@ func (ts *TestSuite) SetBlockHeight(height int64) {
 	ts.ctx = ts.ctx.WithBlockHeight(height)
 }
 
+// SetBlockTime provides arbitrarily setting the chain's block time.
+func (ts *TestSuite) SetBlockTime(t time.Time) {
+	ts.ctx = ts.ctx.WithBlockTime(t)
+}
+
 // Store provides access to the underlying KVStore
 func (ts *TestSuite) Store() store.CommitMultiStore {
 	return ts.ms

@@ -498,6 +498,213 @@ func TestStorageMarketE2E_VidGates(t *testing.T) {
 	})
 }
 
+// deadRetainedVolume drives a volume lease to the dead-but-retained state
+// through the real tenant close path: create → bid → lease, then
+// MsgCloseDeployment twice through the reclamation window. It returns the
+// lease ID, its order, and the wall-clock retention anchor (the block time of
+// the completing close). The suite block time ends at the anchor.
+func (s *smSuite) deadRetainedVolume(owner, vid string, provider sdk.AccAddress, start time.Time) (mv1.LeaseID, mvbeta.Order, time.Time) {
+	s.t.Helper()
+
+	s.SetBlockTime(start)
+	lid, order := s.fullVolumeLease(owner, vid, provider, s.defaultDeposit())
+	did := order.ID.GroupID().DeploymentID()
+
+	// First close starts the 24h reclamation window (the bid's offer).
+	_, err := s.dhandler(s.Context(), &dvbeta.MsgCloseDeployment{ID: did})
+	require.NoError(s.t, err)
+
+	// Past the deadline the close completes terminally, anchoring the
+	// retention window at this block's wall clock.
+	anchor := start.Add(25 * time.Hour)
+	s.SetBlockTime(anchor)
+	_, err = s.dhandler(s.Context(), &dvbeta.MsgCloseDeployment{ID: did})
+	require.NoError(s.t, err)
+
+	lease, found := s.MarketKeeper().GetLease(s.Context(), lid)
+	require.True(s.t, found)
+	require.Equal(s.t, mv1.LeaseClosed, lease.State)
+	require.Equal(s.t, mv1.LeaseClosedReasonVolumeClosedRetain, lease.Reason)
+	require.Equal(s.t, anchor.Unix(), lease.ClosedAt)
+
+	return lid, order, anchor
+}
+
+// ===========================
+// Retention window + adoption (full behavior)
+// ===========================
+
+func TestStorageMarketE2E_RetentionAdoption(t *testing.T) {
+	s := setupStorageMarketSuite(t)
+	s.enableVolumeOrders()
+
+	owner := testutil.AccAddress(t).String()
+	retainer := s.createProvider(smVolumeProviderAttrs())
+	stranger := s.createProvider(smVolumeProviderAttrs())
+
+	start := time.Date(2026, 7, 9, 12, 0, 0, 0, time.UTC)
+	_, volOrder, anchor := s.deadRetainedVolume(owner, "pg-data", retainer, start)
+	volGid := volOrder.ID.GroupID()
+
+	// The dead volume's closed lease anchors the retention window.
+	closedAt, ok := s.MarketKeeper().LastVolumeLeaseClosedAt(s.Context(), volGid)
+	require.True(t, ok)
+	require.Equal(t, anchor.Unix(), closedAt.Unix())
+
+	// One hour into the 24h fixture retention window.
+	s.SetBlockTime(anchor.Add(time.Hour))
+
+	t.Run("re-create inside retention rejected without adopt", func(t *testing.T) {
+		msg := s.volumeCreateMsg(owner, "pg-data", s.defaultDeposit())
+		_, err := s.dhandler(s.Context(), msg)
+		require.ErrorIs(t, err, dv1.ErrVidRetained)
+	})
+
+	t.Run("adopting create succeeds and gates bids to the retainer", func(t *testing.T) {
+		msg := s.volumeCreateMsg(owner, "pg-data", s.defaultDeposit())
+		adoptRef := smVolumeRef(volOrder)
+		msg.Groups[0].Volume.Adopt = &adoptRef
+
+		res, err := s.dhandler(s.Context(), msg)
+		require.NoError(t, err)
+		require.NotNil(t, res)
+
+		gid := dv1.MakeGroupID(msg.ID, 1)
+		testutil.EnsureEvent(t, res.Events, &dv1.EventVolumeAdopted{
+			ID:      gid,
+			Adopted: adoptRef,
+			Vid:     "pg-data",
+		})
+
+		// The vid index moved to the adopting group.
+		got, ok := s.DeploymentKeeper().GetVolumeByVid(s.Context(), owner, "pg-data")
+		require.True(t, ok)
+		require.Equal(t, gid, got)
+
+		// The adoption order is open; its bids are gated to the provider
+		// retaining the dead volume's data.
+		order, found := s.MarketKeeper().GetOrder(s.Context(), mv1.OrderID{
+			Owner: msg.ID.Owner, DSeq: msg.ID.DSeq, GSeq: 1, OSeq: 1,
+		})
+		require.True(t, found)
+
+		window := 24 * time.Hour
+		strangerBid := smAttachBidMsg(order, stranger)
+		strangerBid.ReclamationWindow = &window
+		_, err = s.mhandler(s.Context(), strangerBid)
+		require.ErrorIs(t, err, mhandler.ErrVolumeAdoptionProvider)
+
+		// The retaining provider's bid wins through to an active lease.
+		s.bidAndLease(order, retainer, &window)
+	})
+}
+
+func TestStorageMarketE2E_RetentionExpiry(t *testing.T) {
+	s := setupStorageMarketSuite(t)
+	s.enableVolumeOrders()
+
+	owner := testutil.AccAddress(t).String()
+	retainer := s.createProvider(smVolumeProviderAttrs())
+
+	start := time.Date(2026, 7, 9, 12, 0, 0, 0, time.UTC)
+	_, volOrder, anchor := s.deadRetainedVolume(owner, "pg-data", retainer, start)
+
+	// Past the 24h fixture retention window the anchor has expired.
+	s.SetBlockTime(anchor.Add(24*time.Hour + time.Second))
+
+	t.Run("adoption after expiry rejected", func(t *testing.T) {
+		msg := s.volumeCreateMsg(owner, "pg-data", s.defaultDeposit())
+		adoptRef := smVolumeRef(volOrder)
+		msg.Groups[0].Volume.Adopt = &adoptRef
+
+		_, err := s.dhandler(s.Context(), msg)
+		require.ErrorIs(t, err, dv1.ErrInvalidVolumeAdoption)
+	})
+
+	t.Run("fresh create after expiry allowed", func(t *testing.T) {
+		msg := s.volumeCreateMsg(owner, "pg-data", s.defaultDeposit())
+		res, err := s.dhandler(s.Context(), msg)
+		require.NoError(t, err)
+		require.NotNil(t, res)
+
+		gid, found := s.DeploymentKeeper().GetVolumeByVid(s.Context(), owner, "pg-data")
+		require.True(t, found)
+		assert.Equal(t, dv1.MakeGroupID(msg.ID, 1), gid)
+		assert.NotEqual(t, volOrder.ID.GroupID(), gid)
+	})
+}
+
+// ===========================
+// Pause: same reclamation floor, vid stays held
+// ===========================
+
+func TestStorageMarketE2E_PauseVolumeGroup(t *testing.T) {
+	s := setupStorageMarketSuite(t)
+	s.enableVolumeOrders()
+
+	owner := testutil.AccAddress(t).String()
+	provider := s.createProvider(smVolumeProviderAttrs())
+
+	start := time.Date(2026, 7, 9, 12, 0, 0, 0, time.UTC)
+	s.SetBlockTime(start)
+	volLid, volOrder := s.fullVolumeLease(owner, "pg-data", provider, s.defaultDeposit())
+	volGid := volOrder.ID.GroupID()
+
+	// The first pause starts the reclamation window instead of pausing —
+	// pausing closes the volume lease, so the same floor applies.
+	_, err := s.dhandler(s.Context(), &dvbeta.MsgPauseGroup{ID: volGid})
+	require.NoError(t, err)
+
+	group, found := s.DeploymentKeeper().GetGroup(s.Context(), volGid)
+	require.True(t, found)
+	require.Equal(t, dvbeta.GroupOpen, group.State)
+
+	volLease, found := s.MarketKeeper().GetLease(s.Context(), volLid)
+	require.True(t, found)
+	require.Equal(t, mv1.LeaseReclaiming, volLease.State)
+
+	// Inside the window the pause is refused.
+	s.SetBlockTime(start.Add(time.Hour))
+	_, err = s.dhandler(s.Context(), &dvbeta.MsgPauseGroup{ID: volGid})
+	require.ErrorIs(t, err, mv1.ErrReclamationWindowNotElapsed)
+
+	// Past the deadline the pause completes: group paused, lease closed
+	// under the retain reason with the wall-clock anchor.
+	pausedAt := start.Add(25 * time.Hour)
+	s.SetBlockTime(pausedAt)
+	_, err = s.dhandler(s.Context(), &dvbeta.MsgPauseGroup{ID: volGid})
+	require.NoError(t, err)
+
+	group, found = s.DeploymentKeeper().GetGroup(s.Context(), volGid)
+	require.True(t, found)
+	require.Equal(t, dvbeta.GroupPaused, group.State)
+
+	volLease, found = s.MarketKeeper().GetLease(s.Context(), volLid)
+	require.True(t, found)
+	assert.Equal(t, mv1.LeaseClosed, volLease.State)
+	assert.Equal(t, mv1.LeaseClosedReasonVolumeClosedRetain, volLease.Reason)
+	assert.Equal(t, pausedAt.Unix(), volLease.ClosedAt)
+
+	// A paused volume group stays live: it holds its vid (in use, not
+	// retained) and cannot be adopted.
+	t.Run("paused group holds the vid", func(t *testing.T) {
+		msg := s.volumeCreateMsg(owner, "pg-data", s.defaultDeposit())
+		_, err := s.dhandler(s.Context(), msg)
+		require.ErrorIs(t, err, dv1.ErrVidInUse)
+	})
+
+	t.Run("paused group cannot be adopted", func(t *testing.T) {
+		msg := s.volumeCreateMsg(owner, "pg-data", s.defaultDeposit())
+		adoptRef := smVolumeRef(volOrder)
+		msg.Groups[0].Volume.Adopt = &adoptRef
+
+		// The live-holder vid gate fires first: adopt or not, the vid is
+		// in use, so a paused volume is never adoptable.
+		_, err := s.dhandler(s.Context(), msg)
+		require.ErrorIs(t, err, dv1.ErrVidInUse)
+	})
+}
+
 // ===========================
 // Attach lifecycle
 // ===========================
