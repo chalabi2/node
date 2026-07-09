@@ -94,6 +94,15 @@ func (ms msgServer) CreateDeployment(goCtx context.Context, msg *types.MsgCreate
 		return nil, v1.ErrInvalidPrice.Wrapf("unsupported denomination %s", msg.Groups[0].Price().Denom)
 	}
 
+	// Volume groups run the AEP-87 stateful gates. ValidateDeploymentGroups
+	// above already enforced the single-group invariant, so the volume
+	// group, when present, is the only group.
+	if msg.Groups[0].Volume != nil {
+		if err := ms.validateVolumeCreate(ctx, msg, params); err != nil {
+			return nil, err
+		}
+	}
+
 	deposits, err := ms.escrow.AuthorizeDeposits(ctx, msg)
 	if err != nil {
 		return nil, err
@@ -168,6 +177,19 @@ func (ms msgServer) CloseDeployment(goCtx context.Context, msg *types.MsgCloseDe
 		return &types.MsgCloseDeploymentResponse{}, v1.ErrDeploymentClosed
 	}
 
+	// A volume group with attached compute leases cannot be closed by the
+	// tenant; compute closes first. (The escrow cascade cannot be blocked;
+	// it cascade-detaches in the market keeper instead.)
+	groups, err := ms.deployment.GetGroups(ctx, msg.ID)
+	if err != nil {
+		return &types.MsgCloseDeploymentResponse{}, err
+	}
+	for _, group := range groups {
+		if group.GroupSpec.Volume != nil && ms.market.HasAttachments(ctx, group.ID) {
+			return &types.MsgCloseDeploymentResponse{}, ErrVolumeAttached.Wrapf("volume group %s", group.ID)
+		}
+	}
+
 	if err := ms.escrow.AccountClose(ctx, deployment.ID.ToEscrowAccountID()); err != nil {
 		return &types.MsgCloseDeploymentResponse{}, err
 	}
@@ -188,6 +210,12 @@ func (ms msgServer) CloseGroup(goCtx context.Context, msg *types.MsgCloseGroup) 
 	err := group.ValidateClosable()
 	if err != nil {
 		return nil, err
+	}
+
+	// A volume group with attached compute leases cannot be closed by the
+	// tenant; compute closes first.
+	if group.GroupSpec.Volume != nil && ms.market.HasAttachments(ctx, group.ID) {
+		return nil, ErrVolumeAttached.Wrapf("volume group %s", group.ID)
 	}
 
 	// Update the Group's state
@@ -251,6 +279,122 @@ func (ms msgServer) StartGroup(goCtx context.Context, msg *types.MsgStartGroup) 
 	}
 
 	return &types.MsgStartGroupResponse{}, nil
+}
+
+// validateVolumeCreate runs the AEP-87 stateful gates for creating a volume
+// group: the market feature flag, the params-bounded volume limits, the vid
+// gate, and the adoption / replica reference validation. Stateless shape
+// validation already ran in ValidateDeploymentGroups.
+func (ms msgServer) validateVolumeCreate(ctx sdk.Context, msg *types.MsgCreateDeployment, params types.Params) error {
+	gspec := msg.Groups[0]
+	vol := gspec.Volume
+
+	// 1. Feature flag: volume orders are governance-gated.
+	if !ms.market.VolumeOrdersEnabled(ctx) {
+		return ErrVolumeOrdersDisabled
+	}
+
+	// Governance-bounded limits (size, retention, replicas) live in module
+	// params, so they are enforced here rather than in stateless validation.
+	if err := gspec.ValidateVolumeBounds(params); err != nil {
+		return err
+	}
+
+	// 2. vid gate: the data-continuity label must not be minted over. A
+	// live holder rejects; a dead holder inside its retention window
+	// rejects unless this create adopts exactly that volume; an expired or
+	// absent holder frees the label.
+	if gid, found := ms.deployment.GetVolumeByVid(ctx, msg.ID.Owner, vol.Vid); found {
+		if prev, ok := ms.deployment.GetGroup(ctx, gid); ok {
+			if groupLive(prev) {
+				return ErrVidInUse.Wrapf("vid %q held by volume group %s", vol.Vid, gid)
+			}
+
+			if closedAt, ok := ms.market.LastVolumeLeaseClosedAt(ctx, gid); ok {
+				retainedUntil := closedAt.Add(prev.GroupSpec.Volume.Retention)
+				retained := ctx.BlockTime().Before(retainedUntil)
+				adopted := vol.Adopt != nil && vol.Adopt.GroupID().Equals(gid)
+				if retained && !adopted {
+					return ErrVidRetained.Wrapf("vid %q retained by dead volume group %s until %s", vol.Vid, gid, retainedUntil)
+				}
+			}
+		}
+	}
+
+	// 3. Adoption: the reference must name a dead volume of the same owner
+	// and vid, still inside its retention window.
+	if adopt := vol.Adopt; adopt != nil {
+		target, ok := ms.deployment.GetGroup(ctx, adopt.GroupID())
+		if !ok {
+			return ErrInvalidVolumeAdoption.Wrapf("volume group %s not found", adopt.GroupID())
+		}
+		tvol := target.GroupSpec.Volume
+		if tvol == nil {
+			return ErrInvalidVolumeAdoption.Wrapf("group %s is not a volume group", adopt.GroupID())
+		}
+		if adopt.Owner != msg.ID.Owner {
+			return ErrInvalidVolumeAdoption.Wrap("owner mismatch")
+		}
+		if groupLive(target) {
+			return ErrInvalidVolumeAdoption.Wrapf("volume group %s is not closed", adopt.GroupID())
+		}
+		if tvol.Vid != vol.Vid {
+			return ErrInvalidVolumeAdoption.Wrapf("vid mismatch: %q != %q", vol.Vid, tvol.Vid)
+		}
+		if name := volumeStorageName(target); name != adopt.Name {
+			return ErrInvalidVolumeAdoption.Wrapf("volume name mismatch: %q != %q", adopt.Name, name)
+		}
+		closedAt, ok := ms.market.LastVolumeLeaseClosedAt(ctx, adopt.GroupID())
+		if !ok {
+			return ErrInvalidVolumeAdoption.Wrapf("volume group %s has no closed lease to adopt from", adopt.GroupID())
+		}
+		if !ctx.BlockTime().Before(closedAt.Add(tvol.Retention)) {
+			return ErrInvalidVolumeAdoption.Wrapf("retention window expired at %s", closedAt.Add(tvol.Retention))
+		}
+	}
+
+	// 4. Replica: the reference must name a live volume of the same owner
+	// with backref headroom.
+	if rep := vol.ReplicaOf; rep != nil {
+		target, ok := ms.deployment.GetGroup(ctx, rep.GroupID())
+		if !ok {
+			return ErrInvalidVolumeReplica.Wrapf("volume group %s not found", rep.GroupID())
+		}
+		tvol := target.GroupSpec.Volume
+		if tvol == nil {
+			return ErrInvalidVolumeReplica.Wrapf("group %s is not a volume group", rep.GroupID())
+		}
+		if rep.Owner != msg.ID.Owner {
+			return ErrInvalidVolumeReplica.Wrap("owner mismatch")
+		}
+		if !groupLive(target) {
+			return ErrInvalidVolumeReplica.Wrapf("volume group %s is not live", rep.GroupID())
+		}
+		if name := volumeStorageName(target); name != rep.Name {
+			return ErrInvalidVolumeReplica.Wrapf("volume name mismatch: %q != %q", rep.Name, name)
+		}
+		if count := ms.deployment.GetVolumeReplicaCount(ctx, rep.GroupID()); count >= uint64(tvol.MaxReplicas) {
+			return ErrInvalidVolumeReplica.Wrapf("volume group %s max_replicas (%d) reached", rep.GroupID(), tvol.MaxReplicas)
+		}
+	}
+
+	return nil
+}
+
+// groupLive reports whether the group occupies its vid: open and paused
+// groups are live; closed and insufficient_funds are terminal.
+func groupLive(group types.Group) bool {
+	return group.State == types.GroupOpen || group.State == types.GroupPaused
+}
+
+// volumeStorageName returns the Storage.Name of the volume group's single
+// storage entry — the name a VolumeRef addresses.
+func volumeStorageName(group types.Group) string {
+	res := group.GroupSpec.Resources
+	if len(res) != 1 || len(res[0].Storage) != 1 {
+		return ""
+	}
+	return res[0].Storage[0].Name
 }
 
 func (ms msgServer) UpdateParams(goCtx context.Context, req *types.MsgUpdateParams) (*types.MsgUpdateParamsResponse, error) {

@@ -17,7 +17,8 @@ import (
 	mvbeta "pkg.akt.dev/go/node/market/v2beta1"
 )
 
-// MarketKeeper is the subset of the market keeper needed for denom migration.
+// MarketKeeper is the subset of the market keeper needed for denom migration
+// and the AEP-87 volume gates.
 type MarketKeeper interface {
 	CreateOrder(ctx sdk.Context, id dv1.GroupID, spec dvbeta.GroupSpec, reclamation *dv1.DeploymentReclamation) (mvbeta.Order, error)
 	GetParams(ctx sdk.Context) (mvbeta.Params, error)
@@ -28,6 +29,21 @@ type MarketKeeper interface {
 	SaveOrder(ctx sdk.Context, order mvbeta.Order) error
 	SaveBid(ctx sdk.Context, bid mvbeta.Bid) error
 	SaveLease(ctx sdk.Context, lease mv1.Lease) error
+
+	// AEP-87 narrow volume additions.
+	//
+	// VolumeOrdersEnabled reports the market-module feature flag gating
+	// volume-group creation.
+	VolumeOrdersEnabled(ctx sdk.Context) bool
+	// HasAttachments reports whether the market attachment index holds
+	// entries for the given volume group: an attached volume must not be
+	// closable by the tenant.
+	HasAttachments(ctx sdk.Context, id dv1.GroupID) bool
+	// LastVolumeLeaseClosedAt returns the block time at which the volume
+	// group's most recent closed lease was closed — the anchor of the
+	// post-close retention window — or false when no closed lease is
+	// recorded.
+	LastVolumeLeaseClosedAt(ctx sdk.Context, id dv1.GroupID) (time.Time, bool)
 }
 
 // EscrowKeeper is the subset of the escrow keeper needed for denom migration.

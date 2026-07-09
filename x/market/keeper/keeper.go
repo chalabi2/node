@@ -50,6 +50,9 @@ type IKeeper interface {
 	SaveOrder(ctx sdk.Context, order types.Order) error
 	SaveBid(ctx sdk.Context, bid types.Bid) error
 	SaveLease(ctx sdk.Context, lease mv1.Lease) error
+	VolumeOrdersEnabled(ctx sdk.Context) bool
+	HasAttachments(ctx sdk.Context, id dtypes.GroupID) bool
+	LastVolumeLeaseClosedAt(ctx sdk.Context, id dtypes.GroupID) (time.Time, bool)
 }
 
 // Keeper of the market store
