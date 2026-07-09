@@ -295,9 +295,20 @@ func (k Keeper) VolumeLease(ctx sdk.Context, id dtypes.GroupID) (mv1.Lease, bool
 // to. Pure chain state: the closed lease records in the leases IndexedMap,
 // never provider CRDs.
 func (k Keeper) LastClosedVolumeLeaseProvider(ctx sdk.Context, id dtypes.GroupID) (string, bool) {
-	var provider string
+	lease, found := k.lastClosedVolumeLease(ctx, id)
+	if !found {
+		return "", false
+	}
+
+	return lease.ID.Provider, true
+}
+
+// lastClosedVolumeLease returns the volume group's most recent closed lease.
+// The most recent close wins: later close height, then the later order as
+// the total-order tie-break.
+func (k Keeper) lastClosedVolumeLease(ctx sdk.Context, id dtypes.GroupID) (mv1.Lease, bool) {
+	var last mv1.Lease
 	var oseq uint32
-	var closedOn int64
 	var found bool
 
 	k.WithOrdersForGroup(ctx, id, types.OrderClosed, func(order types.Order) bool {
@@ -312,12 +323,9 @@ func (k Keeper) LastClosedVolumeLeaseProvider(ctx sdk.Context, id dtypes.GroupID
 				default:
 					return false
 				}
-				// The most recent close wins: later close height, then the
-				// later order as the total-order tie-break.
-				if !found || lease.ClosedOn > closedOn || (lease.ClosedOn == closedOn && order.ID.OSeq > oseq) {
-					provider = lease.ID.Provider
+				if !found || lease.ClosedOn > last.ClosedOn || (lease.ClosedOn == last.ClosedOn && order.ID.OSeq > oseq) {
+					last = lease
 					oseq = order.ID.OSeq
-					closedOn = lease.ClosedOn
 					found = true
 				}
 				return false
@@ -326,7 +334,7 @@ func (k Keeper) LastClosedVolumeLeaseProvider(ctx sdk.Context, id dtypes.GroupID
 		return false
 	})
 
-	return provider, found
+	return last, found
 }
 
 // ReclaimVolumeOnClose routes a tenant-initiated close of a volume group
@@ -432,15 +440,21 @@ func (k Keeper) RebuildAttachmentIndexes(ctx sdk.Context) error {
 
 // LastVolumeLeaseClosedAt returns the block time at which the volume group's
 // most recent closed lease was closed — the anchor of the post-close
-// retention window — or false when no closed lease is recorded.
+// retention window — or false when no anchor is recorded.
 //
-// TODO(aep-87): needs an additive closed_at wall-clock field on the
-// market/v1 Lease record (chain-sdk) — Lease currently carries only the
-// closed_on block height, which cannot anchor a duration-typed retention
-// window. Until then no retention anchor exists, so adoption validation
-// rejects and the vid gate treats dead volumes as expired.
-func (k Keeper) LastVolumeLeaseClosedAt(_ sdk.Context, _ dtypes.GroupID) (time.Time, bool) {
-	return time.Time{}, false
+// ClosedAt is zero on leases closed before the v2.2.0 upgrade added the
+// field, so those report no-anchor and the readers treat the dead volume as
+// expired: the vid is free to re-mint and adoption rejects. That is the
+// intended migration semantics for pre-upgrade closes — volume leases only
+// exist behind the AEP-87 feature flag the upgrade ships, so no real
+// retention window predates the field and the upgrade needs no backfill.
+func (k Keeper) LastVolumeLeaseClosedAt(ctx sdk.Context, id dtypes.GroupID) (time.Time, bool) {
+	lease, found := k.lastClosedVolumeLease(ctx, id)
+	if !found || lease.ClosedAt == 0 {
+		return time.Time{}, false
+	}
+
+	return time.Unix(lease.ClosedAt, 0), true
 }
 
 // SpecVolumeRefs collects the volume references an attaching (compute) group

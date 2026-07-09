@@ -774,6 +774,61 @@ func TestCloseDeployment_VolumeAttachedRejected(t *testing.T) {
 }
 
 // ===========================
+// Retention anchor
+// ===========================
+
+func TestLastVolumeLeaseClosedAt(t *testing.T) {
+	suite := setupTestSuite(t)
+	prepareBlanketMocks(suite)
+	suite.enableVolumeOrders()
+
+	providerAddr := testutil.AccAddress(t)
+	volLid, _, volOrder, _ := suite.createVolumeLease("pgdata", providerAddr, 24*time.Hour)
+	volGid := volOrder.ID.GroupID()
+
+	// No closed lease yet: no anchor.
+	_, ok := suite.MarketKeeper().LastVolumeLeaseClosedAt(suite.Context(), volGid)
+	require.False(t, ok)
+
+	// The close funnel stamps the wall-clock anchor.
+	closeTime := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
+	ctx := suite.Context().WithBlockTime(closeTime)
+
+	lease, found := suite.MarketKeeper().GetLease(ctx, volLid)
+	require.True(t, found)
+	require.NoError(t, suite.MarketKeeper().OnLeaseClosed(ctx, lease, mv1.LeaseClosed, mv1.LeaseClosedReasonVolumeClosedRetain))
+
+	order, found := suite.MarketKeeper().GetOrder(ctx, volLid.OrderID())
+	require.True(t, found)
+	require.NoError(t, suite.MarketKeeper().OnOrderClosed(ctx, order))
+
+	closedAt, ok := suite.MarketKeeper().LastVolumeLeaseClosedAt(suite.Context(), volGid)
+	require.True(t, ok)
+	assert.Equal(t, closeTime.Unix(), closedAt.Unix())
+
+	provider, ok := suite.MarketKeeper().LastClosedVolumeLeaseProvider(suite.Context(), volGid)
+	require.True(t, ok)
+	assert.Equal(t, providerAddr.String(), provider)
+
+	// Migration semantics: closed_at is zero on every lease closed before
+	// the v2.2.0 upgrade added the field. A zero anchor reports not-found —
+	// the dead volume behaves as expired — while the adoption provider gate
+	// (which needs no wall clock) still resolves, so the upgrade needs no
+	// backfill.
+	lease, found = suite.MarketKeeper().GetLease(suite.Context(), volLid)
+	require.True(t, found)
+	lease.ClosedAt = 0
+	require.NoError(t, suite.MarketKeeper().SaveLease(suite.Context(), lease))
+
+	_, ok = suite.MarketKeeper().LastVolumeLeaseClosedAt(suite.Context(), volGid)
+	require.False(t, ok)
+
+	provider, ok = suite.MarketKeeper().LastClosedVolumeLeaseProvider(suite.Context(), volGid)
+	require.True(t, ok)
+	assert.Equal(t, providerAddr.String(), provider)
+}
+
+// ===========================
 // Genesis export/import
 // ===========================
 

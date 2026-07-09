@@ -398,6 +398,11 @@ func (k Keeper) OnLeaseClosed(ctx sdk.Context, lease mv1.Lease, state mv1.Lease_
 
 	lease.State = state
 	lease.ClosedOn = ctx.BlockHeight()
+	// ClosedAt is the wall-clock anchor of the AEP-87 volume retention
+	// window. Written on every close path (this is the single close funnel);
+	// zero on leases closed before the field existed, which the retention
+	// readers treat as no-anchor (expired).
+	lease.ClosedAt = ctx.BlockTime().Unix()
 	lease.Reason = reason
 
 	// IndexedMap.Set automatically updates all indexes
