@@ -59,4 +59,5 @@ Ref: https://keepachangelog.com/en/1.0.0/
 ### Bug Fixes
 
 * (x/market) AEP-87: OnEscrowAccountClosed ignores escrow accounts from foreign scopes instead of returning an error; a hook error aborts saveAccount mid-write. Bid-escrow account closes are proven byte-identical across the fix by regression tests.
+* (x/escrow) AuthorizeDeposits presents grant acceptance with the version-stable MsgAccountDeposit shape instead of the staged-version create messages; DepositAuthorization.TryAccept does not recognize deployment/v1beta5 MsgCreateDeployment or market/v2beta1 MsgCreateBid, so every grant-funded deployment and bid was rejected with "insufficient balance" after the module version migration.
 * Fix bug in ditribution and querying rewards

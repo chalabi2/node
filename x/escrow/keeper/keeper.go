@@ -259,25 +259,31 @@ func (k *keeper) AuthorizeDeposits(sctx sdk.Context, msg sdk.Msg) ([]etypes.Depo
 								Sources: mt.Deposit.Sources,
 							},
 						}
+					// The staged-version create messages are translated to the
+					// version-stable MsgAccountDeposit shape: the authorization
+					// reads only the deposit scope and amount, and the scope
+					// rides the escrow account ID. This keeps grant acceptance
+					// working across module version migrations — the sdk-side
+					// DepositAuthorization type switch predates
+					// deployment/v1beta5 and market/v2beta1 and does not
+					// recognize their create messages.
 					case *dvbeta.MsgCreateDeployment:
-						authzMsg = &dvbeta.MsgCreateDeployment{
-							ID:     mt.ID,
-							Groups: mt.Groups,
-							Hash:   mt.Hash,
+						authzMsg = &ev1.MsgAccountDeposit{
+							Signer: mt.ID.Owner,
+							ID:     mt.ID.ToEscrowAccountID(),
 							Deposit: deposit.Deposit{
 								Amount:  requestedSpend,
 								Sources: dep.Sources,
 							},
 						}
 					case *mtypes.MsgCreateBid:
-						authzMsg = &mtypes.MsgCreateBid{
-							ID:    mt.ID,
-							Price: mt.Price,
+						authzMsg = &ev1.MsgAccountDeposit{
+							Signer: mt.ID.Provider,
+							ID:     mt.ID.ToEscrowAccountID(),
 							Deposit: deposit.Deposit{
 								Amount:  requestedSpend,
 								Sources: dep.Sources,
 							},
-							ResourcesOffer: mt.ResourcesOffer,
 						}
 					}
 
