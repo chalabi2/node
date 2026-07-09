@@ -11,6 +11,7 @@ import (
 
 	v1 "pkg.akt.dev/go/node/deployment/v1"
 	types "pkg.akt.dev/go/node/deployment/v1beta5"
+	mv1 "pkg.akt.dev/go/node/market/v1"
 
 	dimports "pkg.akt.dev/node/v2/x/deployment/imports"
 	"pkg.akt.dev/node/v2/x/deployment/keeper"
@@ -185,8 +186,24 @@ func (ms msgServer) CloseDeployment(goCtx context.Context, msg *types.MsgCloseDe
 		return &types.MsgCloseDeploymentResponse{}, err
 	}
 	for _, group := range groups {
-		if group.GroupSpec.Volume != nil && ms.market.HasAttachments(ctx, group.ID) {
+		if group.GroupSpec.Volume == nil {
+			continue
+		}
+
+		if ms.market.HasAttachments(ctx, group.ID) {
 			return &types.MsgCloseDeploymentResponse{}, ErrVolumeAttached.Wrapf("volume group %s", group.ID)
+		}
+
+		// A tenant volume close routes through the reclamation window: the
+		// first close puts the volume lease into LeaseReclaiming and leaves
+		// the deployment active; the close completes at msg time after the
+		// deadline has elapsed.
+		proceed, err := ms.market.ReclaimVolumeOnClose(ctx, group.ID, mv1.LeaseClosedReasonVolumeClosedRetain)
+		if err != nil {
+			return &types.MsgCloseDeploymentResponse{}, err
+		}
+		if !proceed {
+			return &types.MsgCloseDeploymentResponse{}, nil
 		}
 	}
 
@@ -214,8 +231,20 @@ func (ms msgServer) CloseGroup(goCtx context.Context, msg *types.MsgCloseGroup) 
 
 	// A volume group with attached compute leases cannot be closed by the
 	// tenant; compute closes first.
-	if group.GroupSpec.Volume != nil && ms.market.HasAttachments(ctx, group.ID) {
-		return nil, ErrVolumeAttached.Wrapf("volume group %s", group.ID)
+	if group.GroupSpec.Volume != nil {
+		if ms.market.HasAttachments(ctx, group.ID) {
+			return nil, ErrVolumeAttached.Wrapf("volume group %s", group.ID)
+		}
+
+		// A tenant volume close routes through the reclamation window; see
+		// CloseDeployment.
+		proceed, err := ms.market.ReclaimVolumeOnClose(ctx, group.ID, mv1.LeaseClosedReasonVolumeClosedRetain)
+		if err != nil {
+			return nil, err
+		}
+		if !proceed {
+			return &types.MsgCloseGroupResponse{}, nil
+		}
 	}
 
 	// Update the Group's state

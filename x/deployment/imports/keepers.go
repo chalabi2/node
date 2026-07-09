@@ -39,6 +39,12 @@ type MarketKeeper interface {
 	// entries for the given volume group: an attached volume must not be
 	// closable by the tenant.
 	HasAttachments(ctx sdk.Context, id dv1.GroupID) bool
+	// ReclaimVolumeOnClose routes a tenant-initiated close of a volume
+	// group through the reclamation window. It returns true when the close
+	// may proceed now; otherwise the volume lease has entered (or is still
+	// inside) LeaseReclaiming and the close completes at msg time after
+	// the deadline.
+	ReclaimVolumeOnClose(ctx sdk.Context, id dv1.GroupID, reason mv1.LeaseClosedReason) (bool, error)
 	// LastVolumeLeaseClosedAt returns the block time at which the volume
 	// group's most recent closed lease was closed — the anchor of the
 	// post-close retention window — or false when no closed lease is
