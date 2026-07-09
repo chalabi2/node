@@ -15,8 +15,8 @@ import (
 	sdk "github.com/cosmos/cosmos-sdk/types"
 
 	v1 "pkg.akt.dev/go/node/market/v1"
-	"pkg.akt.dev/go/node/market/v1beta5"
-	mvbeta "pkg.akt.dev/go/node/market/v1beta5"
+	"pkg.akt.dev/go/node/market/v2beta1"
+	mvbeta "pkg.akt.dev/go/node/market/v2beta1"
 
 	"pkg.akt.dev/go/cli"
 	clitestutil "pkg.akt.dev/go/cli/testutil"
@@ -98,7 +98,7 @@ func (s *marketGRPCRestTestSuite) SetupSuite() {
 	)
 	s.Require().NoError(err)
 
-	result := &v1beta5.QueryOrdersResponse{}
+	result := &v2beta1.QueryOrdersResponse{}
 	err = val.ClientCtx.Codec.UnmarshalJSON(resp.Bytes(), result)
 	s.Require().NoError(err)
 	s.Require().Len(result.Orders, 1)
@@ -178,7 +178,7 @@ func (s *marketGRPCRestTestSuite) SetupSuite() {
 	)
 	s.Require().NoError(err)
 
-	bidRes := &v1beta5.QueryBidsResponse{}
+	bidRes := &v2beta1.QueryBidsResponse{}
 	err = val.ClientCtx.Codec.UnmarshalJSON(resp.Bytes(), bidRes)
 	s.Require().NoError(err)
 	s.Require().Len(bidRes.Bids, 1)
@@ -211,15 +211,15 @@ func (s *marketGRPCRestTestSuite) SetupSuite() {
 	)
 	s.Require().NoError(err)
 
-	leaseRes := &v1beta5.QueryLeasesResponse{}
+	leaseRes := &v2beta1.QueryLeasesResponse{}
 	err = val.ClientCtx.Codec.UnmarshalJSON(resp.Bytes(), leaseRes)
 	s.Require().NoError(err)
 	s.Require().Len(leaseRes.Leases, 1)
 	leases := leaseRes.Leases
 	s.Require().Equal(keyAddr.String(), leases[0].Lease.ID.Provider)
 
-	s.order.State = v1beta5.OrderActive
-	s.bid.State = v1beta5.BidActive
+	s.order.State = v2beta1.OrderActive
+	s.bid.State = v2beta1.BidActive
 
 	// test query lease
 	s.lease = leases[0].Lease
@@ -233,12 +233,12 @@ func (s *marketGRPCRestTestSuite) TestGetOrders() {
 		name    string
 		url     string
 		expErr  bool
-		expResp v1beta5.Order
+		expResp v2beta1.Order
 		expLen  int
 	}{
 		{
 			"get orders without filters",
-			fmt.Sprintf("%s/akash/market/%s/orders/list", val.APIAddress, v1beta5.GatewayVersion),
+			fmt.Sprintf("%s/akash/market/%s/orders/list", val.APIAddress, v2beta1.GatewayVersion),
 			false,
 			order,
 			1,
@@ -246,7 +246,7 @@ func (s *marketGRPCRestTestSuite) TestGetOrders() {
 		{
 			"get orders with filters",
 			fmt.Sprintf("%s/akash/market/%s/orders/list?filters.owner=%s", val.APIAddress,
-				v1beta5.GatewayVersion,
+				v2beta1.GatewayVersion,
 				order.ID.Owner),
 			false,
 			order,
@@ -255,16 +255,16 @@ func (s *marketGRPCRestTestSuite) TestGetOrders() {
 		{
 			"get orders with wrong state filter",
 			fmt.Sprintf("%s/akash/market/%s/orders/list?filters.state=%s", val.APIAddress,
-				v1beta5.GatewayVersion,
-				v1beta5.OrderStateInvalid.String()),
+				v2beta1.GatewayVersion,
+				v2beta1.OrderStateInvalid.String()),
 			true,
-			v1beta5.Order{},
+			v2beta1.Order{},
 			0,
 		},
 		{
 			"get orders with two filters",
 			fmt.Sprintf("%s/akash/market/%s/orders/list?filters.state=%s&filters.oseq=%d",
-				val.APIAddress, v1beta5.GatewayVersion, order.State.String(), order.ID.OSeq),
+				val.APIAddress, v2beta1.GatewayVersion, order.State.String(), order.ID.OSeq),
 			false,
 			order,
 			1,
@@ -277,7 +277,7 @@ func (s *marketGRPCRestTestSuite) TestGetOrders() {
 			resp, err := sdktestutil.GetRequest(tc.url)
 			s.Require().NoError(err)
 
-			var orders v1beta5.QueryOrdersResponse
+			var orders v2beta1.QueryOrdersResponse
 			err = val.ClientCtx.Codec.UnmarshalJSON(resp, &orders)
 
 			if tc.expErr {
@@ -300,36 +300,36 @@ func (s *marketGRPCRestTestSuite) TestGetOrder() {
 		name    string
 		url     string
 		expErr  bool
-		expResp v1beta5.Order
+		expResp v2beta1.Order
 	}{
 		{
 			"get order with empty input",
-			fmt.Sprintf("%s/akash/market/%s/orders/info", val.APIAddress, v1beta5.GatewayVersion),
+			fmt.Sprintf("%s/akash/market/%s/orders/info", val.APIAddress, v2beta1.GatewayVersion),
 			true,
-			v1beta5.Order{},
+			v2beta1.Order{},
 		},
 		{
 			"get order with invalid input",
 			fmt.Sprintf("%s/akash/market/%s/orders/info?id.owner=%s", val.APIAddress,
-				v1beta5.GatewayVersion,
+				v2beta1.GatewayVersion,
 				order.ID.Owner),
 			true,
-			v1beta5.Order{},
+			v2beta1.Order{},
 		},
 		{
 			"order not found",
 			fmt.Sprintf("%s/akash/market/%s/orders/info?id.owner=%s&id.dseq=%d&id.gseq=%d&id.oseq=%d",
 				val.APIAddress,
-				v1beta5.GatewayVersion,
+				v2beta1.GatewayVersion,
 				order.ID.Owner, 249, 32, 235),
 			true,
-			v1beta5.Order{},
+			v2beta1.Order{},
 		},
 		{
 			"valid get order request",
 			fmt.Sprintf("%s/akash/market/%s/orders/info?id.owner=%s&id.dseq=%d&id.gseq=%d&id.oseq=%d",
 				val.APIAddress,
-				v1beta5.GatewayVersion,
+				v2beta1.GatewayVersion,
 				order.ID.Owner,
 				order.ID.DSeq,
 				order.ID.GSeq,
@@ -345,7 +345,7 @@ func (s *marketGRPCRestTestSuite) TestGetOrder() {
 			resp, err := sdktestutil.GetRequest(tc.url)
 			s.Require().NoError(err)
 
-			var out v1beta5.QueryOrderResponse
+			var out v2beta1.QueryOrderResponse
 			err = val.ClientCtx.Codec.UnmarshalJSON(resp, &out)
 
 			if tc.expErr {
@@ -366,12 +366,12 @@ func (s *marketGRPCRestTestSuite) TestGetBids() {
 		name    string
 		url     string
 		expErr  bool
-		expResp v1beta5.Bid
+		expResp v2beta1.Bid
 		expLen  int
 	}{
 		{
 			"get bids without filters",
-			fmt.Sprintf("%s/akash/market/%s/bids/list", val.APIAddress, v1beta5.GatewayVersion),
+			fmt.Sprintf("%s/akash/market/%s/bids/list", val.APIAddress, v2beta1.GatewayVersion),
 			false,
 			bid,
 			1,
@@ -380,7 +380,7 @@ func (s *marketGRPCRestTestSuite) TestGetBids() {
 			"get bids with filters",
 			fmt.Sprintf("%s/akash/market/%s/bids/list?filters.owner=%s",
 				val.APIAddress,
-				v1beta5.GatewayVersion,
+				v2beta1.GatewayVersion,
 				bid.ID.Owner),
 			false,
 			bid,
@@ -390,17 +390,17 @@ func (s *marketGRPCRestTestSuite) TestGetBids() {
 			"get bids with wrong state filter",
 			fmt.Sprintf("%s/akash/market/%s/bids/list?filters.state=%s",
 				val.APIAddress,
-				v1beta5.GatewayVersion,
-				v1beta5.BidStateInvalid.String()),
+				v2beta1.GatewayVersion,
+				v2beta1.BidStateInvalid.String()),
 			true,
-			v1beta5.Bid{},
+			v2beta1.Bid{},
 			0,
 		},
 		{
 			"get bids with more filters",
 			fmt.Sprintf("%s/akash/market/%s/bids/list?filters.state=%s&filters.oseq=%d&filters.provider=%s",
 				val.APIAddress,
-				v1beta5.GatewayVersion,
+				v2beta1.GatewayVersion,
 				bid.State.String(),
 				bid.ID.OSeq,
 				bid.ID.Provider),
@@ -416,7 +416,7 @@ func (s *marketGRPCRestTestSuite) TestGetBids() {
 			resp, err := sdktestutil.GetRequest(tc.url)
 			s.Require().NoError(err)
 
-			var bids v1beta5.QueryBidsResponse
+			var bids v2beta1.QueryBidsResponse
 			err = val.ClientCtx.Codec.UnmarshalJSON(resp, &bids)
 
 			if tc.expErr {
@@ -439,41 +439,41 @@ func (s *marketGRPCRestTestSuite) TestGetBid() {
 		name    string
 		url     string
 		expErr  bool
-		expResp v1beta5.Bid
+		expResp v2beta1.Bid
 	}{
 		{
 			"get bid with empty input",
-			fmt.Sprintf("%s/akash/market/%s/bids/info", val.APIAddress, v1beta5.GatewayVersion),
+			fmt.Sprintf("%s/akash/market/%s/bids/info", val.APIAddress, v2beta1.GatewayVersion),
 			true,
-			v1beta5.Bid{},
+			v2beta1.Bid{},
 		},
 		{
 			"get bid with invalid input",
 			fmt.Sprintf("%s/akash/market/%s/bids/info?id.owner=%s",
 				val.APIAddress,
-				v1beta5.GatewayVersion,
+				v2beta1.GatewayVersion,
 				bid.ID.Owner),
 			true,
-			v1beta5.Bid{},
+			v2beta1.Bid{},
 		},
 		{
 			"bid not found",
 			fmt.Sprintf("%s/akash/market/%s/bids/info?id.owner=%s&id.dseq=%d&id.gseq=%d&id.oseq=%d&id.provider=%s",
 				val.APIAddress,
-				v1beta5.GatewayVersion,
+				v2beta1.GatewayVersion,
 				bid.ID.Provider,
 				249,
 				32,
 				235,
 				bid.ID.Owner),
 			true,
-			v1beta5.Bid{},
+			v2beta1.Bid{},
 		},
 		{
 			"valid get bid request",
 			fmt.Sprintf("%s/akash/market/%s/bids/info?id.owner=%s&id.dseq=%d&id.gseq=%d&id.oseq=%d&id.provider=%s",
 				val.APIAddress,
-				v1beta5.GatewayVersion,
+				v2beta1.GatewayVersion,
 				bid.ID.Owner,
 				bid.ID.DSeq,
 				bid.ID.GSeq,
@@ -490,7 +490,7 @@ func (s *marketGRPCRestTestSuite) TestGetBid() {
 			resp, err := sdktestutil.GetRequest(tc.url)
 			s.Require().NoError(err)
 
-			var out v1beta5.QueryBidResponse
+			var out v2beta1.QueryBidResponse
 			err = val.ClientCtx.Codec.UnmarshalJSON(resp, &out)
 
 			if tc.expErr {
@@ -516,7 +516,7 @@ func (s *marketGRPCRestTestSuite) TestGetLeases() {
 	}{
 		{
 			"get leases without filters",
-			fmt.Sprintf("%s/akash/market/%s/leases/list", val.APIAddress, v1beta5.GatewayVersion),
+			fmt.Sprintf("%s/akash/market/%s/leases/list", val.APIAddress, v2beta1.GatewayVersion),
 			false,
 			lease,
 			1,
@@ -525,7 +525,7 @@ func (s *marketGRPCRestTestSuite) TestGetLeases() {
 			"get leases with filters",
 			fmt.Sprintf("%s/akash/market/%s/leases/list?filters.owner=%s",
 				val.APIAddress,
-				v1beta5.GatewayVersion,
+				v2beta1.GatewayVersion,
 				lease.ID.Owner),
 			false,
 			lease,
@@ -535,7 +535,7 @@ func (s *marketGRPCRestTestSuite) TestGetLeases() {
 			"get leases with wrong state filter",
 			fmt.Sprintf("%s/akash/market/%s/leases/list?filters.state=%s",
 				val.APIAddress,
-				v1beta5.GatewayVersion,
+				v2beta1.GatewayVersion,
 				v1.LeaseStateInvalid.String()),
 			true,
 			v1.Lease{},
@@ -545,7 +545,7 @@ func (s *marketGRPCRestTestSuite) TestGetLeases() {
 			"get leases with more filters",
 			fmt.Sprintf("%s/akash/market/%s/leases/list?filters.state=%s&filters.oseq=%d&filters.provider=%s",
 				val.APIAddress,
-				v1beta5.GatewayVersion,
+				v2beta1.GatewayVersion,
 				lease.State.String(),
 				lease.ID.OSeq,
 				lease.ID.Provider),
@@ -561,7 +561,7 @@ func (s *marketGRPCRestTestSuite) TestGetLeases() {
 			resp, err := sdktestutil.GetRequest(tc.url)
 			s.Require().NoError(err)
 
-			var leases v1beta5.QueryLeasesResponse
+			var leases v2beta1.QueryLeasesResponse
 			err = val.ClientCtx.Codec.UnmarshalJSON(resp, &leases)
 
 			if tc.expErr {
@@ -588,7 +588,7 @@ func (s *marketGRPCRestTestSuite) TestGetLease() {
 	}{
 		{
 			"get lease with empty input",
-			fmt.Sprintf("%s/akash/market/%s/leases/info", val.APIAddress, v1beta5.GatewayVersion),
+			fmt.Sprintf("%s/akash/market/%s/leases/info", val.APIAddress, v2beta1.GatewayVersion),
 			true,
 			v1.Lease{},
 		},
@@ -596,7 +596,7 @@ func (s *marketGRPCRestTestSuite) TestGetLease() {
 			"get lease with invalid input",
 			fmt.Sprintf("%s/akash/market/%s/leases/info?id.owner=%s",
 				val.APIAddress,
-				v1beta5.GatewayVersion,
+				v2beta1.GatewayVersion,
 				lease.ID.Owner),
 			true,
 			v1.Lease{},
@@ -605,7 +605,7 @@ func (s *marketGRPCRestTestSuite) TestGetLease() {
 			"lease not found",
 			fmt.Sprintf("%s/akash/market/%s/leases/info?id.owner=%s&id.dseq=%d&id.gseq=%d&id.oseq=%d&id.provider=%s",
 				val.APIAddress,
-				v1beta5.GatewayVersion,
+				v2beta1.GatewayVersion,
 				lease.ID.Provider,
 				249,
 				32,
@@ -618,7 +618,7 @@ func (s *marketGRPCRestTestSuite) TestGetLease() {
 			"valid get lease request",
 			fmt.Sprintf("%s/akash/market/%s/leases/info?id.owner=%s&id.dseq=%d&id.gseq=%d&id.oseq=%d&id.provider=%s",
 				val.APIAddress,
-				v1beta5.GatewayVersion,
+				v2beta1.GatewayVersion,
 				lease.ID.Owner,
 				lease.ID.DSeq,
 				lease.ID.GSeq,
@@ -635,7 +635,7 @@ func (s *marketGRPCRestTestSuite) TestGetLease() {
 			resp, err := sdktestutil.GetRequest(tc.url)
 			s.Require().NoError(err)
 
-			var out v1beta5.QueryLeaseResponse
+			var out v2beta1.QueryLeaseResponse
 			err = val.ClientCtx.Codec.UnmarshalJSON(resp, &out)
 
 			if tc.expErr {

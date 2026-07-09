@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	dv1 "pkg.akt.dev/go/node/deployment/v1"
-	dvbeta "pkg.akt.dev/go/node/deployment/v1beta4"
+	dvbeta "pkg.akt.dev/go/node/deployment/v1beta5"
 	eid "pkg.akt.dev/go/node/escrow/id/v1"
 	types "pkg.akt.dev/go/node/escrow/types/v1"
 	"pkg.akt.dev/go/node/escrow/v1"

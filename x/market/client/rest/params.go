@@ -5,8 +5,8 @@ package rest
 // 	"strconv"
 //
 // 	sdk "github.com/cosmos/cosmos-sdk/types"
-// 	"pkg.akt.dev/go/node/market/v1beta5"
-// 	"pkg.akt.dev/go/node/market/v1beta5"
+// 	"pkg.akt.dev/go/node/market/v2beta1"
+// 	"pkg.akt.dev/go/node/market/v2beta1"
 //
 // 	drest "pkg.akt.dev/node/v2/x/deployment/client/rest"
 // )
@@ -34,13 +34,13 @@ package rest
 // }
 //
 // // OrderFiltersFromRequest  returns OrderFilters with given params in request
-// func OrderFiltersFromRequest(r *http.Request) (v1beta5.OrderFilters, string) {
+// func OrderFiltersFromRequest(r *http.Request) (v2beta1.OrderFilters, string) {
 // 	gfilters, errMsg := drest.GroupFiltersFromRequest(r)
 // 	if len(errMsg) != 0 {
-// 		return v1beta5.OrderFilters{}, errMsg
+// 		return v2beta1.OrderFilters{}, errMsg
 // 	}
 //
-// 	ofilters := v1beta5.OrderFilters{
+// 	ofilters := v2beta1.OrderFilters{
 // 		Owner: gfilters.Owner,
 // 		State: gfilters.State,
 // 	}
@@ -71,13 +71,13 @@ package rest
 // }
 //
 // // BidFiltersFromRequest  returns BidFilters with given params in request
-// func BidFiltersFromRequest(r *http.Request) (v1beta5.BidFilters, string) {
+// func BidFiltersFromRequest(r *http.Request) (v2beta1.BidFilters, string) {
 // 	ofilters, errMsg := drest.GroupFiltersFromRequest(r)
 // 	if len(errMsg) != 0 {
-// 		return v1beta5.BidFilters{}, errMsg
+// 		return v2beta1.BidFilters{}, errMsg
 // 	}
 //
-// 	bfilters := v1beta5.BidFilters{
+// 	bfilters := v2beta1.BidFilters{
 // 		Owner: ofilters.Owner,
 // 		State: ofilters.State,
 // 	}

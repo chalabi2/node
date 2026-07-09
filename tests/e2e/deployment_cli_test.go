@@ -16,7 +16,7 @@ import (
 	"pkg.akt.dev/go/cli"
 	clitestutil "pkg.akt.dev/go/cli/testutil"
 	dv1 "pkg.akt.dev/go/node/deployment/v1"
-	dvbeta "pkg.akt.dev/go/node/deployment/v1beta4"
+	dvbeta "pkg.akt.dev/go/node/deployment/v1beta5"
 	ev1 "pkg.akt.dev/go/node/escrow/v1"
 	deposit "pkg.akt.dev/go/node/types/deposit/v1"
 

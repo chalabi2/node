@@ -14,10 +14,10 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"pkg.akt.dev/go/node/deployment/v1"
-	dvbeta "pkg.akt.dev/go/node/deployment/v1beta4"
+	dvbeta "pkg.akt.dev/go/node/deployment/v1beta5"
 	eid "pkg.akt.dev/go/node/escrow/id/v1"
 	deposit "pkg.akt.dev/go/node/types/deposit/v1"
-	"pkg.akt.dev/go/testutil"
+	testutil "pkg.akt.dev/node/v2/testutil/fixtures"
 
 	"pkg.akt.dev/node/v2/app"
 	"pkg.akt.dev/node/v2/testutil/state"

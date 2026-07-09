@@ -9,8 +9,8 @@ import (
 
 	dv1 "pkg.akt.dev/go/node/deployment/v1"
 	mv1 "pkg.akt.dev/go/node/market/v1"
-	mvbeta "pkg.akt.dev/go/node/market/v1beta5"
-	"pkg.akt.dev/go/testutil"
+	mvbeta "pkg.akt.dev/go/node/market/v2beta1"
+	testutil "pkg.akt.dev/node/v2/testutil/fixtures"
 )
 
 func Test_CreateOrderWithReclamation(t *testing.T) {
