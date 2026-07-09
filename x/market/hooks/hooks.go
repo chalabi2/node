@@ -28,9 +28,12 @@ func New(dkeeper DeploymentKeeper, mkeeper MarketKeeper) Hooks {
 }
 
 func (h *hooks) OnEscrowAccountClosed(ctx sdk.Context, obj etypes.Account) error {
+	// A hook error aborts saveAccount mid-write (refunds and store.Set are
+	// already applied), so an account from a foreign scope must be ignored,
+	// not treated as an error — mirroring OnEscrowPaymentClosed below.
 	id, err := dv1.DeploymentIDFromEscrowID(obj.ID)
 	if err != nil {
-		return err
+		return nil
 	}
 
 	deployment, found := h.dkeeper.GetDeployment(ctx, id)
