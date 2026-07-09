@@ -584,6 +584,10 @@ func (k *keeper) accountSettle(ctx sdk.Context, acc *account) ([]payment, bool, 
 
 	// all payments made in full
 	if !overdrawn {
+		if err := k.emitAccountRunway(ctx, acc, payments); err != nil {
+			return payments, false, err
+		}
+
 		return payments, false, nil
 	}
 
@@ -600,7 +604,61 @@ func (k *keeper) accountSettle(ctx sdk.Context, acc *account) ([]payment, bool, 
 		}
 	}
 
+	if err := k.emitAccountRunway(ctx, acc, payments); err != nil {
+		return payments, overdrawn, err
+	}
+
 	return payments, overdrawn, nil
+}
+
+// emitAccountRunway emits EventAccountRunway at the end of a settle for any
+// account with open payments: the deterministic, tenant-computable exhaustion
+// deadline. It changes no state.
+func (k *keeper) emitAccountRunway(ctx sdk.Context, acc *account, payments []payment) error {
+	depletion, open := accountRunway(ctx.BlockHeight(), acc, payments)
+	if !open {
+		return nil
+	}
+
+	return ctx.EventManager().EmitTypedEvent(&ev1.EventAccountRunway{
+		ID:                       acc.ID,
+		ProjectedDepletionHeight: depletion,
+	})
+}
+
+// accountRunway returns the projected block height at which the account's
+// funds no longer cover its open payment rates, and whether the account has
+// any open payments at all. The projection is
+// height + floor(Funds[0] / sum of open payment rates); it is 0 when the
+// funds cover no full block.
+func accountRunway(height int64, acc *account, payments []payment) (int64, bool) {
+	rate := sdkmath.LegacyZeroDec()
+	open := false
+
+	for idx := range payments {
+		if payments[idx].State.State != etypes.StateOpen {
+			continue
+		}
+
+		open = true
+		rate = rate.Add(payments[idx].State.Rate.Amount)
+	}
+
+	if !open {
+		return 0, false
+	}
+
+	funds := acc.State.Funds[0].Amount
+	if !rate.IsPositive() || !funds.IsPositive() {
+		return 0, true
+	}
+
+	blocks := funds.QuoTruncate(rate).TruncateInt64()
+	if blocks == 0 {
+		return 0, true
+	}
+
+	return height + blocks, true
 }
 
 // settleFromAktFallback attempts to settle overdrawn payments using AKT funds
