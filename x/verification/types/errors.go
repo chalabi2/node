@@ -37,4 +37,5 @@ var (
 	ErrUnknownVerificationRecordType     = sdkerrors.RegisterWithGRPCCode(ModuleName, 29, codes.InvalidArgument, "verification record type has no decoder")
 	ErrInsufficientAuditorCount          = sdkerrors.RegisterWithGRPCCode(ModuleName, 30, codes.FailedPrecondition, "provider lacks required independent auditor count")
 	ErrUnauthorizedAuditEscrowSettlement = sdkerrors.RegisterWithGRPCCode(ModuleName, 31, codes.PermissionDenied, "signer cannot use requested audit escrow settlement path")
+	ErrNoEligibleAuditor                 = sdkerrors.RegisterWithGRPCCode(ModuleName, 32, codes.FailedPrecondition, "no active bonded auditor can satisfy requested tier")
 )

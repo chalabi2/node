@@ -1527,6 +1527,85 @@ func TestOpenAuditEscrowRejectsInvalidCapabilities(t *testing.T) {
 	require.ErrorIs(t, err, moduletypes.ErrInvalidReason)
 }
 
+func TestOpenAuditEscrowRequiresEligibleAuditor(t *testing.T) {
+	tests := []struct {
+		name    string
+		auditor func(sdk.Context, Keeper, sdk.AccAddress, vtypes.Params)
+	}{
+		{
+			name: "no auditors",
+		},
+		{
+			name: "pending bond",
+			auditor: func(ctx sdk.Context, k Keeper, auditor sdk.AccAddress, params vtypes.Params) {
+				require.NoError(t, k.SetAuditor(ctx, vtypes.AuditorRecord{
+					Address:            auditor.String(),
+					Status:             vtypes.AuditorStatusPendingBond,
+					MaxAttestationTier: vtypes.TierVerified,
+					BondAmount:         params.BondL2,
+					BondStatus:         vtypes.BondStatusNotBonded,
+					RegisteredAt:       ctx.BlockTime(),
+					RenewalDeadline:    ctx.BlockTime().Add(params.RenewalPeriodL2),
+				}))
+			},
+		},
+		{
+			name: "under tier",
+			auditor: func(ctx sdk.Context, k Keeper, auditor sdk.AccAddress, params vtypes.Params) {
+				require.NoError(t, k.SetAuditor(ctx, vtypes.AuditorRecord{
+					Address:            auditor.String(),
+					Status:             vtypes.AuditorStatusActive,
+					MaxAttestationTier: vtypes.TierIdentified,
+					BondAmount:         params.BondL1,
+					BondStatus:         vtypes.BondStatusBonded,
+					RegisteredAt:       ctx.BlockTime(),
+					RenewalDeadline:    ctx.BlockTime().Add(params.RenewalPeriodL1),
+				}))
+			},
+		},
+		{
+			name: "frozen",
+			auditor: func(ctx sdk.Context, k Keeper, auditor sdk.AccAddress, params vtypes.Params) {
+				require.NoError(t, k.SetAuditor(ctx, vtypes.AuditorRecord{
+					Address:            auditor.String(),
+					Status:             vtypes.AuditorStatusActive,
+					MaxAttestationTier: vtypes.TierVerified,
+					BondAmount:         params.BondL2,
+					BondStatus:         vtypes.BondStatusFrozen,
+					RegisteredAt:       ctx.BlockTime(),
+					RenewalDeadline:    ctx.BlockTime().Add(params.RenewalPeriodL2),
+				}))
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			bank := &recordingBank{}
+			ctx, k := setupStoreKeeperWithOptions(t, WithBankKeeper(bank))
+			provider := testutil.AccAddress(t)
+			params := k.GetParams(ctx)
+
+			if tc.auditor != nil {
+				tc.auditor(ctx, k, testutil.AccAddress(t), params)
+			}
+
+			_, err := k.OpenAuditEscrow(
+				ctx,
+				provider,
+				vtypes.TierVerified,
+				nil,
+				params.MinFeeL2,
+				params.ProviderAuditDeposit,
+				ctx.BlockTime().Add(params.TtlL2),
+				nil,
+			)
+			require.ErrorIs(t, err, moduletypes.ErrNoEligibleAuditor)
+			require.Empty(t, bank.accountToModule)
+		})
+	}
+}
+
 func TestRegisterAuditorRejectsWrongAuthority(t *testing.T) {
 	ctx, k := setupStoreKeeperWithOptions(t, WithAuthority("gov"))
 

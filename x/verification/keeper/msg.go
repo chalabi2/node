@@ -359,6 +359,9 @@ func (k *keeper) OpenAuditEscrow(
 	if !expiresAt.After(ctx.BlockTime()) {
 		return 0, errorsmod.Wrap(moduletypes.ErrInvalidReason, "audit escrow expiry must be in the future")
 	}
+	if !k.hasEligibleAuditor(ctx, params, tier) {
+		return 0, moduletypes.ErrNoEligibleAuditor
+	}
 
 	if err := k.sendAccountToModule(ctx, provider, fee); err != nil {
 		return 0, err
@@ -394,6 +397,28 @@ func (k *keeper) OpenAuditEscrow(
 		return 0, err
 	}
 	return id, nil
+}
+
+func (k *keeper) hasEligibleAuditor(ctx sdk.Context, params vtypes.Params, tier vtypes.VerificationTier) bool {
+	minBond := vtypes.MinBondForTier(params, tier)
+	eligible := false
+	k.WithAuditors(ctx, func(record vtypes.AuditorRecord) bool {
+		if record.Status != vtypes.AuditorStatusActive {
+			return false
+		}
+		if record.BondStatus != vtypes.BondStatusBonded {
+			return false
+		}
+		if !vtypes.TierAtLeast(record.MaxAttestationTier, tier) {
+			return false
+		}
+		if !coinAtLeast(record.BondAmount, minBond) {
+			return false
+		}
+		eligible = true
+		return true
+	})
+	return eligible
 }
 
 func (k *keeper) CancelAuditEscrow(ctx sdk.Context, provider sdk.AccAddress, auditEscrowID uint64) error {
