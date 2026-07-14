@@ -547,6 +547,11 @@ func TestSubmitAttestationSameAuditorReplacementDisposition(t *testing.T) {
 			existing.Deposit = params.AttestationDeposit
 			existing.DepositStatus = tc.existingDepositStatus
 			require.NoError(t, k.SetAttestation(ctx, existing))
+			oldEscrow := openAuditEscrowRecord(ctx, provider, existing.AuditEscrowID, params)
+			oldEscrow.Status = vtypes.AuditEscrowStatusConsumed
+			oldEscrow.ConsumedByAuditor = auditor.String()
+			oldEscrow.ConsumedAt = &existing.CreatedAt
+			require.NoError(t, k.SetAuditEscrow(ctx, oldEscrow))
 			require.NoError(t, k.SetAuditEscrow(ctx, openAuditEscrowRecord(ctx, provider, 1, params)))
 
 			err := k.SubmitAttestation(
@@ -575,13 +580,26 @@ func TestSubmitAttestationSameAuditorReplacementDisposition(t *testing.T) {
 					OldAuditEscrowID: existing.AuditEscrowID,
 					NewAuditEscrowID: 1,
 				})
+				testutil.EnsureEvent(t, events, &vtypes.EventAuditEscrowSettled{
+					AuditEscrowID:    existing.AuditEscrowID,
+					Reason:           vtypes.AuditEscrowSettlementReasonNoFault,
+					FaultAttribution: vtypes.FaultAttributionNoFault,
+				})
 				require.Equal(t, []bankTransfer{
 					{to: auditor, module: moduletypes.ModuleName, amt: sdk.NewCoins(params.MinFeeL1)},
 					{to: auditor, module: moduletypes.ModuleName, amt: sdk.NewCoins(params.AttestationDeposit)},
+					{to: provider, module: moduletypes.ModuleName, amt: sdk.NewCoins(params.ProviderAuditDeposit)},
 				}, bank.moduleToAccount)
 				require.Equal(t, []bankTransfer{
 					{from: auditor, module: moduletypes.ModuleName, amt: sdk.NewCoins(params.AttestationDeposit)},
 				}, bank.accountToModule)
+				settledEscrow, found := k.GetAuditEscrow(ctx, existing.AuditEscrowID)
+				require.True(t, found)
+				require.Equal(t, vtypes.AuditEscrowStatusSettled, settledEscrow.Status)
+				require.Equal(t, vtypes.FeeStatusReleasedToAuditor, settledEscrow.FeeStatus)
+				require.Equal(t, vtypes.ProviderDepositStatusReturnedToProvider, settledEscrow.ProviderDepositStatus)
+				require.Equal(t, vtypes.AuditEscrowSettlementReasonNoFault, settledEscrow.SettlementReason)
+				require.Equal(t, vtypes.FaultAttributionNoFault, settledEscrow.FaultAttribution)
 			}
 
 			got, found := k.GetAttestation(ctx, provider, auditor)

@@ -650,7 +650,29 @@ func (k *keeper) settleReplacedAttestation(ctx sdk.Context, provider, auditor sd
 	if err != nil {
 		return vtypes.AttestationRecord{}, false, err
 	}
+	escrow, err := k.consumedAttestationEscrow(ctx, provider, auditor, attestation)
+	if err != nil {
+		return vtypes.AttestationRecord{}, false, err
+	}
 	if err = k.settleAttestationFunds(ctx, provider, auditor, attestation, result); err != nil {
+		return vtypes.AttestationRecord{}, false, err
+	}
+	if err = k.sendModuleToAccount(ctx, provider, escrow.ProviderDeposit); err != nil {
+		return vtypes.AttestationRecord{}, false, err
+	}
+	escrow.Status = vtypes.AuditEscrowStatusSettled
+	escrow.FeeStatus = result.FeeStatus
+	escrow.ProviderDepositStatus = vtypes.ProviderDepositStatusReturnedToProvider
+	escrow.SettlementReason = vtypes.AuditEscrowSettlementReasonNoFault
+	escrow.FaultAttribution = vtypes.FaultAttributionNoFault
+	if err = k.SetAuditEscrow(ctx, escrow); err != nil {
+		return vtypes.AttestationRecord{}, false, err
+	}
+	if err = ctx.EventManager().EmitTypedEvent(&vtypes.EventAuditEscrowSettled{
+		AuditEscrowID:    escrow.ID,
+		Reason:           escrow.SettlementReason,
+		FaultAttribution: escrow.FaultAttribution,
+	}); err != nil {
 		return vtypes.AttestationRecord{}, false, err
 	}
 	return attestation, true, nil
