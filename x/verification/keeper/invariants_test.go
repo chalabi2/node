@@ -35,7 +35,7 @@ func TestEscrowBalanceInvariant(t *testing.T) {
 	bank := &recordingBank{balances: map[string]sdk.Coin{
 		bondDenom: sdk.NewCoin(bondDenom, expected),
 	}}
-	ctx, k := setupStoreKeeperWithOptions(t, WithBankKeeper(bank))
+	ctx, k := setupStoreKeeperWithOptions(t, WithBankKeeper(bank), WithDistributionKeeper(bank))
 	require.NoError(t, k.SetAttestation(ctx, attestation))
 	require.NoError(t, k.SetAuditEscrow(ctx, escrow))
 	require.NoError(t, k.SetAuditor(ctx, auditorRecord))

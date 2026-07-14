@@ -6,7 +6,7 @@ import (
 	"time"
 
 	sdkmath "cosmossdk.io/math"
-	distrtypes "github.com/cosmos/cosmos-sdk/x/distribution/types"
+	authtypes "github.com/cosmos/cosmos-sdk/x/auth/types"
 	"github.com/stretchr/testify/require"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
@@ -21,7 +21,7 @@ import (
 
 func TestHappyPathMessages(t *testing.T) {
 	bank := &recordingBank{}
-	ctx, k := setupStoreKeeperWithOptions(t, WithAuthority("gov"), WithBankKeeper(bank))
+	ctx, k := setupStoreKeeperWithOptions(t, WithAuthority("gov"), WithBankKeeper(bank), WithDistributionKeeper(bank))
 	provider := testutil.AccAddress(t)
 	auditor := testutil.AccAddress(t)
 	params := k.GetParams(ctx)
@@ -190,7 +190,7 @@ func TestSubmitAttestationRejectsAuditorWithoutBondedStatus(t *testing.T) {
 
 func TestSubmitAttestationConsumesCoveredEscrowFee(t *testing.T) {
 	bank := &recordingBank{}
-	ctx, k := setupStoreKeeperWithOptions(t, WithBankKeeper(bank))
+	ctx, k := setupStoreKeeperWithOptions(t, WithBankKeeper(bank), WithDistributionKeeper(bank))
 	provider := testutil.AccAddress(t)
 	auditor := testutil.AccAddress(t)
 	params := k.GetParams(ctx)
@@ -534,7 +534,7 @@ func TestSubmitAttestationSameAuditorReplacementDisposition(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			bank := &recordingBank{}
-			ctx, k := setupStoreKeeperWithOptions(t, WithBankKeeper(bank))
+			ctx, k := setupStoreKeeperWithOptions(t, WithBankKeeper(bank), WithDistributionKeeper(bank))
 			provider := testutil.AccAddress(t)
 			auditor := testutil.AccAddress(t)
 			params := k.GetParams(ctx)
@@ -619,7 +619,7 @@ func TestRevokeAttestationDisposition(t *testing.T) {
 		wantFeeStatus     vtypes.FeeStatus
 		wantDepositStatus vtypes.DepositStatus
 		wantAccountTxs    []func(sdk.AccAddress, sdk.AccAddress, vtypes.AttestationRecord) bankTransfer
-		wantModuleTxs     []func(vtypes.AttestationRecord) bankTransfer
+		wantCommunityPool []func(vtypes.AttestationRecord) bankTransfer
 	}{
 		{
 			name:              "provider fault releases fee and deposit to auditor",
@@ -647,9 +647,9 @@ func TestRevokeAttestationDisposition(t *testing.T) {
 					return bankTransfer{to: provider, module: moduletypes.ModuleName, amt: sdk.NewCoins(attestation.Fee)}
 				},
 			},
-			wantModuleTxs: []func(vtypes.AttestationRecord) bankTransfer{
+			wantCommunityPool: []func(vtypes.AttestationRecord) bankTransfer{
 				func(attestation vtypes.AttestationRecord) bankTransfer {
-					return bankTransfer{fromModule: moduletypes.ModuleName, toModule: distrtypes.ModuleName, amt: sdk.NewCoins(attestation.Deposit)}
+					return bankTransfer{from: authtypes.NewModuleAddress(moduletypes.ModuleName), amt: sdk.NewCoins(attestation.Deposit)}
 				},
 			},
 		},
@@ -673,7 +673,7 @@ func TestRevokeAttestationDisposition(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			bank := &recordingBank{}
-			ctx, k := setupStoreKeeperWithOptions(t, WithBankKeeper(bank))
+			ctx, k := setupStoreKeeperWithOptions(t, WithBankKeeper(bank), WithDistributionKeeper(bank))
 			provider := testutil.AccAddress(t)
 			auditor := testutil.AccAddress(t)
 			params := k.GetParams(ctx)
@@ -717,15 +717,15 @@ func TestRevokeAttestationDisposition(t *testing.T) {
 				module: moduletypes.ModuleName,
 				amt:    sdk.NewCoins(escrow.ProviderDeposit),
 			})
-			wantModuleTxs := make([]bankTransfer, 0, len(tc.wantModuleTxs))
-			for _, build := range tc.wantModuleTxs {
-				wantModuleTxs = append(wantModuleTxs, build(attestation))
+			wantCommunityPool := make([]bankTransfer, 0, len(tc.wantCommunityPool))
+			for _, build := range tc.wantCommunityPool {
+				wantCommunityPool = append(wantCommunityPool, build(attestation))
 			}
 			require.Equal(t, wantAccountTxs, bank.moduleToAccount)
-			if len(wantModuleTxs) == 0 {
-				require.Empty(t, bank.moduleToModule)
+			if len(wantCommunityPool) == 0 {
+				require.Empty(t, bank.communityPool)
 			} else {
-				require.Equal(t, wantModuleTxs, bank.moduleToModule)
+				require.Equal(t, wantCommunityPool, bank.communityPool)
 			}
 			testutil.EnsureEvent(t, ctx.EventManager().Events().ToABCIEvents(), &vtypes.EventAuditEscrowSettled{
 				AuditEscrowID:    attestation.AuditEscrowID,
@@ -801,7 +801,7 @@ func TestRevokeAttestationRejectsInvalidInputs(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			bank := &recordingBank{}
-			ctx, k := setupStoreKeeperWithOptions(t, WithBankKeeper(bank))
+			ctx, k := setupStoreKeeperWithOptions(t, WithBankKeeper(bank), WithDistributionKeeper(bank))
 			provider := testutil.AccAddress(t)
 			auditor := testutil.AccAddress(t)
 			tc.setup(ctx, k, provider, auditor)
@@ -809,7 +809,7 @@ func TestRevokeAttestationRejectsInvalidInputs(t *testing.T) {
 			err := k.RevokeAttestation(ctx, tc.provider(provider), tc.auditor(auditor), tc.reason, tc.evidence)
 			require.ErrorIs(t, err, tc.wantErr)
 			require.Empty(t, bank.moduleToAccount)
-			require.Empty(t, bank.moduleToModule)
+			require.Empty(t, bank.communityPool)
 
 			if tc.wantState != vtypes.AttestationStatusUnspecified {
 				got, found := k.GetAttestation(ctx, provider, auditor)
@@ -824,7 +824,7 @@ func TestRevokeAttestationRejectsInvalidInputs(t *testing.T) {
 
 func TestRemoveAttestationDisposition(t *testing.T) {
 	bank := &recordingBank{}
-	ctx, k := setupStoreKeeperWithOptions(t, WithBankKeeper(bank))
+	ctx, k := setupStoreKeeperWithOptions(t, WithBankKeeper(bank), WithDistributionKeeper(bank))
 	provider := testutil.AccAddress(t)
 	auditor := testutil.AccAddress(t)
 	params := k.GetParams(ctx)
@@ -913,7 +913,7 @@ func TestRemoveAttestationRejectsInvalidInputs(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			bank := &recordingBank{}
-			ctx, k := setupStoreKeeperWithOptions(t, WithBankKeeper(bank))
+			ctx, k := setupStoreKeeperWithOptions(t, WithBankKeeper(bank), WithDistributionKeeper(bank))
 			provider := testutil.AccAddress(t)
 			auditor := testutil.AccAddress(t)
 			tc.setup(ctx, k, provider, auditor)
@@ -921,7 +921,7 @@ func TestRemoveAttestationRejectsInvalidInputs(t *testing.T) {
 			err := k.RemoveAttestation(ctx, tc.provider(provider), tc.auditor(auditor))
 			require.ErrorIs(t, err, tc.wantErr)
 			require.Empty(t, bank.moduleToAccount)
-			require.Empty(t, bank.moduleToModule)
+			require.Empty(t, bank.communityPool)
 
 			if tc.wantState != vtypes.AttestationStatusUnspecified {
 				got, found := k.GetAttestation(ctx, provider, auditor)
@@ -940,7 +940,7 @@ func TestRevokeProviderAttestationVoidsSingleAttestation(t *testing.T) {
 		wantFeeStatus     vtypes.FeeStatus
 		wantDepositStatus vtypes.DepositStatus
 		wantAccountTxs    []func(sdk.AccAddress, sdk.AccAddress, vtypes.AttestationRecord) bankTransfer
-		wantModuleTxs     []func(vtypes.AttestationRecord) bankTransfer
+		wantCommunityPool []func(vtypes.AttestationRecord) bankTransfer
 	}{
 		{
 			name:              "provider fault pays auditor",
@@ -968,9 +968,9 @@ func TestRevokeProviderAttestationVoidsSingleAttestation(t *testing.T) {
 					return bankTransfer{to: provider, module: moduletypes.ModuleName, amt: sdk.NewCoins(attestation.Fee)}
 				},
 			},
-			wantModuleTxs: []func(vtypes.AttestationRecord) bankTransfer{
+			wantCommunityPool: []func(vtypes.AttestationRecord) bankTransfer{
 				func(attestation vtypes.AttestationRecord) bankTransfer {
-					return bankTransfer{fromModule: moduletypes.ModuleName, toModule: distrtypes.ModuleName, amt: sdk.NewCoins(attestation.Deposit)}
+					return bankTransfer{from: authtypes.NewModuleAddress(moduletypes.ModuleName), amt: sdk.NewCoins(attestation.Deposit)}
 				},
 			},
 		},
@@ -979,7 +979,7 @@ func TestRevokeProviderAttestationVoidsSingleAttestation(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			bank := &recordingBank{}
-			ctx, k := setupStoreKeeperWithOptions(t, WithAuthority("gov"), WithBankKeeper(bank))
+			ctx, k := setupStoreKeeperWithOptions(t, WithAuthority("gov"), WithBankKeeper(bank), WithDistributionKeeper(bank))
 			provider := testutil.AccAddress(t)
 			auditor := testutil.AccAddress(t)
 			params := k.GetParams(ctx)
@@ -1016,18 +1016,17 @@ func TestRevokeProviderAttestationVoidsSingleAttestation(t *testing.T) {
 			for _, build := range tc.wantAccountTxs {
 				wantAccountTxs = append(wantAccountTxs, build(provider, auditor, attestation))
 			}
-			wantModuleTxs := make([]bankTransfer, 0, len(tc.wantModuleTxs)+1)
-			for _, build := range tc.wantModuleTxs {
-				wantModuleTxs = append(wantModuleTxs, build(attestation))
+			wantCommunityPool := make([]bankTransfer, 0, len(tc.wantCommunityPool)+1)
+			for _, build := range tc.wantCommunityPool {
+				wantCommunityPool = append(wantCommunityPool, build(attestation))
 			}
 			if tc.fault == vtypes.FaultAttributionProviderFault {
 				require.Equal(t, vtypes.ProviderDepositStatusSlashed, settledEscrow.ProviderDepositStatus)
 				require.Equal(t, vtypes.AuditEscrowSettlementReasonProviderFault, settledEscrow.SettlementReason)
 				require.Equal(t, vtypes.FaultAttributionProviderFault, settledEscrow.FaultAttribution)
-				wantModuleTxs = append(wantModuleTxs, bankTransfer{
-					fromModule: moduletypes.ModuleName,
-					toModule:   distrtypes.ModuleName,
-					amt:        sdk.NewCoins(escrow.ProviderDeposit),
+				wantCommunityPool = append(wantCommunityPool, bankTransfer{
+					from: authtypes.NewModuleAddress(moduletypes.ModuleName),
+					amt:  sdk.NewCoins(escrow.ProviderDeposit),
 				})
 			} else {
 				require.Equal(t, vtypes.ProviderDepositStatusReturnedToProvider, settledEscrow.ProviderDepositStatus)
@@ -1040,10 +1039,10 @@ func TestRevokeProviderAttestationVoidsSingleAttestation(t *testing.T) {
 				})
 			}
 			require.Equal(t, wantAccountTxs, bank.moduleToAccount)
-			if len(wantModuleTxs) == 0 {
-				require.Empty(t, bank.moduleToModule)
+			if len(wantCommunityPool) == 0 {
+				require.Empty(t, bank.communityPool)
 			} else {
-				require.Equal(t, wantModuleTxs, bank.moduleToModule)
+				require.Equal(t, wantCommunityPool, bank.communityPool)
 			}
 			testutil.EnsureEvent(t, ctx.EventManager().Events().ToABCIEvents(), &vtypes.EventAttestationVoided{
 				Provider: provider.String(),
@@ -1056,7 +1055,7 @@ func TestRevokeProviderAttestationVoidsSingleAttestation(t *testing.T) {
 
 func TestRevokeAllProviderAttestationsVoidsActiveProviderAttestations(t *testing.T) {
 	bank := &recordingBank{}
-	ctx, k := setupStoreKeeperWithOptions(t, WithAuthority("gov"), WithBankKeeper(bank))
+	ctx, k := setupStoreKeeperWithOptions(t, WithAuthority("gov"), WithBankKeeper(bank), WithDistributionKeeper(bank))
 	provider := testutil.AccAddress(t)
 	auditorA := testutil.AccAddress(t)
 	auditorB := testutil.AccAddress(t)
@@ -1117,14 +1116,14 @@ func TestRevokeAllProviderAttestationsVoidsActiveProviderAttestations(t *testing
 		{to: auditorB, module: moduletypes.ModuleName, amt: sdk.NewCoins(attestationB.Deposit)},
 	}, bank.moduleToAccount)
 	require.ElementsMatch(t, []bankTransfer{
-		{fromModule: moduletypes.ModuleName, toModule: distrtypes.ModuleName, amt: sdk.NewCoins(params.ProviderAuditDeposit)},
-		{fromModule: moduletypes.ModuleName, toModule: distrtypes.ModuleName, amt: sdk.NewCoins(params.ProviderAuditDeposit)},
-	}, bank.moduleToModule)
+		{from: authtypes.NewModuleAddress(moduletypes.ModuleName), amt: sdk.NewCoins(params.ProviderAuditDeposit)},
+		{from: authtypes.NewModuleAddress(moduletypes.ModuleName), amt: sdk.NewCoins(params.ProviderAuditDeposit)},
+	}, bank.communityPool)
 }
 
 func TestRevokeAuditorAttestationsVoidsWorkAndSlashesBond(t *testing.T) {
 	bank := &recordingBank{}
-	ctx, k := setupStoreKeeperWithOptions(t, WithAuthority("gov"), WithBankKeeper(bank))
+	ctx, k := setupStoreKeeperWithOptions(t, WithAuthority("gov"), WithBankKeeper(bank), WithDistributionKeeper(bank))
 	auditor := testutil.AccAddress(t)
 	otherAuditor := testutil.AccAddress(t)
 	params := k.GetParams(ctx)
@@ -1195,15 +1194,15 @@ func TestRevokeAuditorAttestationsVoidsWorkAndSlashesBond(t *testing.T) {
 		{to: providerB, module: moduletypes.ModuleName, amt: sdk.NewCoins(params.ProviderAuditDeposit)},
 	}, bank.moduleToAccount)
 	require.ElementsMatch(t, []bankTransfer{
-		{fromModule: moduletypes.ModuleName, toModule: distrtypes.ModuleName, amt: sdk.NewCoins(attestationA.Deposit)},
-		{fromModule: moduletypes.ModuleName, toModule: distrtypes.ModuleName, amt: sdk.NewCoins(attestationB.Deposit)},
-		{fromModule: moduletypes.ModuleName, toModule: distrtypes.ModuleName, amt: sdk.NewCoins(auditorRecord.BondAmount)},
-	}, bank.moduleToModule)
+		{from: authtypes.NewModuleAddress(moduletypes.ModuleName), amt: sdk.NewCoins(attestationA.Deposit)},
+		{from: authtypes.NewModuleAddress(moduletypes.ModuleName), amt: sdk.NewCoins(attestationB.Deposit)},
+		{from: authtypes.NewModuleAddress(moduletypes.ModuleName), amt: sdk.NewCoins(auditorRecord.BondAmount)},
+	}, bank.communityPool)
 }
 
 func TestCancelAuditEscrowSettlesUnconsumedEscrow(t *testing.T) {
 	bank := &recordingBank{}
-	ctx, k := setupStoreKeeperWithOptions(t, WithBankKeeper(bank))
+	ctx, k := setupStoreKeeperWithOptions(t, WithBankKeeper(bank), WithDistributionKeeper(bank))
 	provider := testutil.AccAddress(t)
 	params := k.GetParams(ctx)
 
@@ -1276,7 +1275,7 @@ func TestCancelAuditEscrowRejectsConsumedEscrow(t *testing.T) {
 
 func TestSettleAuditEscrowProviderFaultSlashesDeposit(t *testing.T) {
 	bank := &recordingBank{}
-	ctx, k := setupStoreKeeperWithOptions(t, WithAuthority("gov"), WithBankKeeper(bank))
+	ctx, k := setupStoreKeeperWithOptions(t, WithAuthority("gov"), WithBankKeeper(bank), WithDistributionKeeper(bank))
 	provider := testutil.AccAddress(t)
 	params := k.GetParams(ctx)
 
@@ -1310,8 +1309,8 @@ func TestSettleAuditEscrowProviderFaultSlashesDeposit(t *testing.T) {
 		{to: provider, module: moduletypes.ModuleName, amt: sdk.NewCoins(params.MinFeeL1)},
 	}, bank.moduleToAccount)
 	require.Equal(t, []bankTransfer{
-		{fromModule: moduletypes.ModuleName, toModule: distrtypes.ModuleName, amt: sdk.NewCoins(params.ProviderAuditDeposit)},
-	}, bank.moduleToModule)
+		{from: authtypes.NewModuleAddress(moduletypes.ModuleName), amt: sdk.NewCoins(params.ProviderAuditDeposit)},
+	}, bank.communityPool)
 }
 
 func TestSettleAuditEscrowRejectsInvalidReasonAttribution(t *testing.T) {
@@ -1400,7 +1399,7 @@ func TestWithdrawProviderBondVoidsUnsupportedAttestations(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			bank := &recordingBank{}
-			ctx, k := setupStoreKeeperWithOptions(t, WithBankKeeper(bank))
+			ctx, k := setupStoreKeeperWithOptions(t, WithBankKeeper(bank), WithDistributionKeeper(bank))
 			provider := testutil.AccAddress(t)
 			auditor := testutil.AccAddress(t)
 			params := k.GetParams(ctx)
@@ -1457,7 +1456,7 @@ func TestWithdrawProviderBondVoidsUnsupportedAttestations(t *testing.T) {
 
 func TestProviderBondUnbondingCompletionMovesFunds(t *testing.T) {
 	bank := &recordingBank{}
-	ctx, k := setupStoreKeeperWithOptions(t, WithBankKeeper(bank))
+	ctx, k := setupStoreKeeperWithOptions(t, WithBankKeeper(bank), WithDistributionKeeper(bank))
 	provider := testutil.AccAddress(t)
 	amount := sdk.NewInt64Coin(bondDenom, 50000000)
 	require.NoError(t, k.SetProviderBond(ctx, providerBondRecord(provider)))
@@ -1526,7 +1525,7 @@ func TestSlashProviderBondValidation(t *testing.T) {
 
 func TestSlashProviderBondLeavesSupportedAttestationsValid(t *testing.T) {
 	bank := &recordingBank{}
-	ctx, k := setupStoreKeeperWithOptions(t, WithAuthority("gov"), WithBankKeeper(bank))
+	ctx, k := setupStoreKeeperWithOptions(t, WithAuthority("gov"), WithBankKeeper(bank), WithDistributionKeeper(bank))
 	provider := testutil.AccAddress(t)
 	auditor := testutil.AccAddress(t)
 	params := k.GetParams(ctx)
@@ -1562,7 +1561,7 @@ func TestSlashProviderBondLeavesSupportedAttestationsValid(t *testing.T) {
 
 func TestSlashProviderBondSlashesFundsAndVoidsAttestations(t *testing.T) {
 	bank := &recordingBank{}
-	ctx, k := setupStoreKeeperWithOptions(t, WithAuthority("gov"), WithBankKeeper(bank))
+	ctx, k := setupStoreKeeperWithOptions(t, WithAuthority("gov"), WithBankKeeper(bank), WithDistributionKeeper(bank))
 	provider := testutil.AccAddress(t)
 	auditor := testutil.AccAddress(t)
 	params := k.GetParams(ctx)
@@ -1615,8 +1614,8 @@ func TestSlashProviderBondSlashesFundsAndVoidsAttestations(t *testing.T) {
 		{to: provider, module: moduletypes.ModuleName, amt: sdk.NewCoins(params.ProviderAuditDeposit)},
 	}, bank.moduleToAccount)
 	require.Equal(t, []bankTransfer{
-		{fromModule: moduletypes.ModuleName, toModule: distrtypes.ModuleName, amt: sdk.NewCoins(sdk.NewInt64Coin(bondDenom, 100000000))},
-	}, bank.moduleToModule)
+		{from: authtypes.NewModuleAddress(moduletypes.ModuleName), amt: sdk.NewCoins(sdk.NewInt64Coin(bondDenom, 100000000))},
+	}, bank.communityPool)
 }
 
 func TestSubmitAttestationRejectsMalformedEvidenceHash(t *testing.T) {
@@ -1738,7 +1737,7 @@ func TestOpenAuditEscrowRequiresEligibleAuditor(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			bank := &recordingBank{}
-			ctx, k := setupStoreKeeperWithOptions(t, WithBankKeeper(bank))
+			ctx, k := setupStoreKeeperWithOptions(t, WithBankKeeper(bank), WithDistributionKeeper(bank))
 			provider := testutil.AccAddress(t)
 			params := k.GetParams(ctx)
 
@@ -2075,6 +2074,7 @@ type recordingBank struct {
 	accountToModule []bankTransfer
 	moduleToAccount []bankTransfer
 	moduleToModule  []bankTransfer
+	communityPool   []bankTransfer
 	balances        map[string]sdk.Coin
 }
 
@@ -2121,4 +2121,26 @@ func (b *recordingBank) SendCoinsFromModuleToModule(_ context.Context, senderMod
 		amt:        amt,
 	})
 	return nil
+}
+
+func (b *recordingBank) FundCommunityPool(_ context.Context, amount sdk.Coins, sender sdk.AccAddress) error {
+	b.communityPool = append(b.communityPool, bankTransfer{
+		from: sender,
+		amt:  amount,
+	})
+	return nil
+}
+
+func TestSlashedFundsEnterCommunityPool(t *testing.T) {
+	bank := &recordingBank{}
+	ctx, k := setupStoreKeeperWithOptions(t, WithBankKeeper(bank), WithDistributionKeeper(bank))
+	coin := sdk.NewInt64Coin(bondDenom, 100000000)
+
+	err := k.(*keeper).fundCommunityPool(ctx, coin)
+	require.NoError(t, err)
+	require.Equal(t, []bankTransfer{{
+		from: authtypes.NewModuleAddress(moduletypes.ModuleName),
+		amt:  sdk.NewCoins(coin),
+	}}, bank.communityPool)
+	require.Empty(t, bank.moduleToModule)
 }

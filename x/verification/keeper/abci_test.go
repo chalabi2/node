@@ -16,7 +16,7 @@ import (
 
 func TestEndBlockerExpiresAttestation(t *testing.T) {
 	bank := &recordingBank{}
-	ctx, k := setupStoreKeeperWithOptions(t, WithBankKeeper(bank))
+	ctx, k := setupStoreKeeperWithOptions(t, WithBankKeeper(bank), WithDistributionKeeper(bank))
 	provider := testutil.AccAddress(t)
 	auditor := testutil.AccAddress(t)
 	record := attestationRecord(provider, auditor)
@@ -71,7 +71,7 @@ func TestEndBlockerExpiresAttestation(t *testing.T) {
 
 func TestEndBlockerIgnoresStaleAttestationExpiryQueue(t *testing.T) {
 	bank := &recordingBank{}
-	ctx, k := setupStoreKeeperWithOptions(t, WithBankKeeper(bank))
+	ctx, k := setupStoreKeeperWithOptions(t, WithBankKeeper(bank), WithDistributionKeeper(bank))
 	provider := testutil.AccAddress(t)
 	auditor := testutil.AccAddress(t)
 	record := attestationRecord(provider, auditor)
@@ -106,7 +106,7 @@ func TestEndBlockerLapsesAuditorAtRenewalDeadline(t *testing.T) {
 
 func TestEndBlockerCompletesAuditorBondUnbonding(t *testing.T) {
 	bank := &recordingBank{}
-	ctx, k := setupStoreKeeperWithOptions(t, WithBankKeeper(bank))
+	ctx, k := setupStoreKeeperWithOptions(t, WithBankKeeper(bank), WithDistributionKeeper(bank))
 	auditor := testutil.AccAddress(t)
 	record := auditorRecord(auditor)
 	record.Status = vtypes.AuditorStatusResigned
@@ -147,7 +147,7 @@ func TestEndBlockerSuspendsSnapshotCompliance(t *testing.T) {
 
 func TestEndBlockerExpiresAuditEscrowAndHonorsCap(t *testing.T) {
 	bank := &recordingBank{}
-	ctx, k := setupStoreKeeperWithOptions(t, WithBankKeeper(bank))
+	ctx, k := setupStoreKeeperWithOptions(t, WithBankKeeper(bank), WithDistributionKeeper(bank))
 	params := k.GetParams(ctx)
 	params.MaxEndblockerAuditEscrowExpiries = 1
 	k.SetParams(ctx, params)
@@ -192,7 +192,7 @@ func TestEndBlockerExpiresAuditEscrowAndHonorsCap(t *testing.T) {
 
 func TestEndBlockerDoesNotExpireConsumedAuditEscrow(t *testing.T) {
 	bank := &recordingBank{}
-	ctx, k := setupStoreKeeperWithOptions(t, WithBankKeeper(bank))
+	ctx, k := setupStoreKeeperWithOptions(t, WithBankKeeper(bank), WithDistributionKeeper(bank))
 	provider := testutil.AccAddress(t)
 	auditor := testutil.AccAddress(t)
 	escrow := auditEscrowRecord(provider, auditor)

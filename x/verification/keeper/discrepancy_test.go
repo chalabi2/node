@@ -6,7 +6,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
-	distrtypes "github.com/cosmos/cosmos-sdk/x/distribution/types"
+	authtypes "github.com/cosmos/cosmos-sdk/x/auth/types"
 
 	vtypes "pkg.akt.dev/go/node/verification/v1"
 	"pkg.akt.dev/go/testutil"
@@ -180,7 +180,7 @@ func TestSubmitAttestationRejectsFrozenAuditor(t *testing.T) {
 
 func TestResolveDiscrepancySettlesAttestationsAndAuditorBonds(t *testing.T) {
 	bank := &recordingBank{}
-	ctx, k := setupStoreKeeperWithOptions(t, WithAuthority("gov"), WithBankKeeper(bank))
+	ctx, k := setupStoreKeeperWithOptions(t, WithAuthority("gov"), WithBankKeeper(bank), WithDistributionKeeper(bank))
 	provider := testutil.AccAddress(t)
 	auditorA := testutil.AccAddress(t)
 	auditorB := testutil.AccAddress(t)
@@ -261,14 +261,14 @@ func TestResolveDiscrepancySettlesAttestationsAndAuditorBonds(t *testing.T) {
 		{to: provider, module: moduletypes.ModuleName, amt: sdk.NewCoins(params.ProviderAuditDeposit)},
 	}, bank.moduleToAccount)
 	require.Equal(t, []bankTransfer{
-		{fromModule: moduletypes.ModuleName, toModule: distrtypes.ModuleName, amt: sdk.NewCoins(params.AttestationDeposit)},
-		{fromModule: moduletypes.ModuleName, toModule: distrtypes.ModuleName, amt: sdk.NewCoins(params.BondL4)},
-	}, bank.moduleToModule)
+		{from: authtypes.NewModuleAddress(moduletypes.ModuleName), amt: sdk.NewCoins(params.AttestationDeposit)},
+		{from: authtypes.NewModuleAddress(moduletypes.ModuleName), amt: sdk.NewCoins(params.BondL4)},
+	}, bank.communityPool)
 }
 
 func TestResolveDiscrepancySlashesProviderDepositsOnProviderFault(t *testing.T) {
 	bank := &recordingBank{}
-	ctx, k := setupStoreKeeperWithOptions(t, WithAuthority("gov"), WithBankKeeper(bank))
+	ctx, k := setupStoreKeeperWithOptions(t, WithAuthority("gov"), WithBankKeeper(bank), WithDistributionKeeper(bank))
 	provider := testutil.AccAddress(t)
 	auditorA := testutil.AccAddress(t)
 	auditorB := testutil.AccAddress(t)
@@ -324,14 +324,14 @@ func TestResolveDiscrepancySlashesProviderDepositsOnProviderFault(t *testing.T) 
 		{to: auditorB, module: moduletypes.ModuleName, amt: sdk.NewCoins(params.AttestationDeposit)},
 	}, bank.moduleToAccount)
 	require.Equal(t, []bankTransfer{
-		{fromModule: moduletypes.ModuleName, toModule: distrtypes.ModuleName, amt: sdk.NewCoins(params.ProviderAuditDeposit)},
-		{fromModule: moduletypes.ModuleName, toModule: distrtypes.ModuleName, amt: sdk.NewCoins(params.ProviderAuditDeposit)},
-	}, bank.moduleToModule)
+		{from: authtypes.NewModuleAddress(moduletypes.ModuleName), amt: sdk.NewCoins(params.ProviderAuditDeposit)},
+		{from: authtypes.NewModuleAddress(moduletypes.ModuleName), amt: sdk.NewCoins(params.ProviderAuditDeposit)},
+	}, bank.communityPool)
 }
 
 func TestEndBlockerTimesOutPendingDiscrepancy(t *testing.T) {
 	bank := &recordingBank{}
-	ctx, k := setupStoreKeeperWithOptions(t, WithBankKeeper(bank))
+	ctx, k := setupStoreKeeperWithOptions(t, WithBankKeeper(bank), WithDistributionKeeper(bank))
 	provider := testutil.AccAddress(t)
 	auditorA := testutil.AccAddress(t)
 	auditorB := testutil.AccAddress(t)
@@ -396,9 +396,9 @@ func TestEndBlockerTimesOutPendingDiscrepancy(t *testing.T) {
 		{to: provider, module: moduletypes.ModuleName, amt: sdk.NewCoins(params.ProviderAuditDeposit)},
 	}, bank.moduleToAccount)
 	require.Equal(t, []bankTransfer{
-		{fromModule: moduletypes.ModuleName, toModule: distrtypes.ModuleName, amt: sdk.NewCoins(params.AttestationDeposit)},
-		{fromModule: moduletypes.ModuleName, toModule: distrtypes.ModuleName, amt: sdk.NewCoins(params.AttestationDeposit)},
-	}, bank.moduleToModule)
+		{from: authtypes.NewModuleAddress(moduletypes.ModuleName), amt: sdk.NewCoins(params.AttestationDeposit)},
+		{from: authtypes.NewModuleAddress(moduletypes.ModuleName), amt: sdk.NewCoins(params.AttestationDeposit)},
+	}, bank.communityPool)
 }
 
 func setupPendingDiscrepancy(t testing.TB, ctx sdk.Context, k Keeper, provider, auditorA, auditorB sdk.AccAddress) {

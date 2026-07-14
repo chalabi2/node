@@ -82,12 +82,13 @@ type Keeper interface {
 }
 
 type keeper struct {
-	cdc       codec.BinaryCodec
-	skey      storetypes.StoreKey
-	authority string
-	bank      BankKeeper
-	provider  ProviderKeeper
-	market    MarketStatsKeeper
+	cdc          codec.BinaryCodec
+	skey         storetypes.StoreKey
+	authority    string
+	bank         BankKeeper
+	distribution DistributionKeeper
+	provider     ProviderKeeper
+	market       MarketStatsKeeper
 }
 
 func NewKeeper(cdc codec.BinaryCodec, skey storetypes.StoreKey, opts ...Option) Keeper {

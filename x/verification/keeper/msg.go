@@ -8,7 +8,7 @@ import (
 	errorsmod "cosmossdk.io/errors"
 	"cosmossdk.io/math"
 	sdk "github.com/cosmos/cosmos-sdk/types"
-	distrtypes "github.com/cosmos/cosmos-sdk/x/distribution/types"
+	authtypes "github.com/cosmos/cosmos-sdk/x/auth/types"
 	govtypes "github.com/cosmos/cosmos-sdk/x/gov/types"
 
 	vtypes "pkg.akt.dev/go/node/verification/v1"
@@ -274,7 +274,7 @@ func (k *keeper) SlashProviderBond(
 
 	slashedCoin := sdk.NewCoin(record.BondedAmount.Denom, slashAmount)
 	remaining := sdk.NewCoin(record.BondedAmount.Denom, record.BondedAmount.Amount.Sub(slashAmount))
-	if err := k.sendModuleToDistribution(ctx, slashedCoin); err != nil {
+	if err := k.fundCommunityPool(ctx, slashedCoin); err != nil {
 		return err
 	}
 
@@ -924,7 +924,7 @@ func (k *keeper) voidGovernanceAttestation(
 
 func (k *keeper) slashAuditorBond(ctx sdk.Context, record vtypes.AuditorRecord) error {
 	if !record.BondAmount.IsNil() && !record.BondAmount.IsZero() {
-		if err := k.sendModuleToDistribution(ctx, record.BondAmount); err != nil {
+		if err := k.fundCommunityPool(ctx, record.BondAmount); err != nil {
 			return err
 		}
 	}
@@ -1460,11 +1460,14 @@ func (k *keeper) sendModuleToAccount(ctx sdk.Context, addr sdk.AccAddress, coin 
 	return k.bank.SendCoinsFromModuleToAccount(ctx, moduletypes.ModuleName, addr, sdk.NewCoins(coin))
 }
 
-func (k *keeper) sendModuleToDistribution(ctx sdk.Context, coin sdk.Coin) error {
-	if k.bank == nil || coin.IsZero() {
+func (k *keeper) fundCommunityPool(ctx sdk.Context, coin sdk.Coin) error {
+	if coin.IsZero() {
 		return nil
 	}
-	return k.bank.SendCoinsFromModuleToModule(ctx, moduletypes.ModuleName, distrtypes.ModuleName, sdk.NewCoins(coin))
+	if k.distribution == nil {
+		return errorsmod.Wrap(moduletypes.ErrInvalidReason, "distribution keeper is not configured")
+	}
+	return k.distribution.FundCommunityPool(ctx, sdk.NewCoins(coin), authtypes.NewModuleAddress(moduletypes.ModuleName))
 }
 
 func (k *keeper) settleAuditEscrowFunds(ctx sdk.Context, provider sdk.AccAddress, escrow vtypes.AuditEscrowRecord, result SettlementResult) error {
@@ -1481,7 +1484,7 @@ func (k *keeper) settleAuditEscrowFunds(ctx sdk.Context, provider sdk.AccAddress
 	case vtypes.ProviderDepositStatusReturnedToProvider:
 		return k.sendModuleToAccount(ctx, provider, escrow.ProviderDeposit)
 	case vtypes.ProviderDepositStatusSlashed:
-		return k.sendModuleToDistribution(ctx, escrow.ProviderDeposit)
+		return k.fundCommunityPool(ctx, escrow.ProviderDeposit)
 	case vtypes.ProviderDepositStatusEscrowed, vtypes.ProviderDepositStatusUnspecified:
 		return errorsmod.Wrapf(moduletypes.ErrInvalidReason, "unsupported audit escrow deposit settlement %s", result.ProviderDepositStatus)
 	}
@@ -1511,7 +1514,7 @@ func (k *keeper) settleAttestationFunds(ctx sdk.Context, provider, auditor sdk.A
 	case vtypes.DepositStatusReturnedToAuditor:
 		return k.sendModuleToAccount(ctx, auditor, attestation.Deposit)
 	case vtypes.DepositStatusSlashed:
-		return k.sendModuleToDistribution(ctx, attestation.Deposit)
+		return k.fundCommunityPool(ctx, attestation.Deposit)
 	case vtypes.DepositStatusEscrowed, vtypes.DepositStatusPendingDiscrepancy, vtypes.DepositStatusUnspecified:
 		return errorsmod.Wrapf(moduletypes.ErrInvalidReason, "unsupported attestation deposit settlement %s", result.DepositStatus)
 	}
@@ -1557,7 +1560,7 @@ func (k *keeper) settlePendingDiscrepancyAttestationFunds(ctx sdk.Context, provi
 	case vtypes.DepositStatusReturnedToAuditor:
 		return k.sendModuleToAccount(ctx, auditor, attestation.Deposit)
 	case vtypes.DepositStatusSlashed:
-		return k.sendModuleToDistribution(ctx, attestation.Deposit)
+		return k.fundCommunityPool(ctx, attestation.Deposit)
 	case vtypes.DepositStatusEscrowed, vtypes.DepositStatusPendingDiscrepancy, vtypes.DepositStatusUnspecified:
 		return errorsmod.Wrapf(moduletypes.ErrInvalidReason, "unsupported pending discrepancy deposit settlement %s", result.DepositStatus)
 	}
@@ -1610,7 +1613,7 @@ func (k *keeper) settleConsumedAttestation(
 		escrow.SettlementReason = vtypes.AuditEscrowSettlementReasonNoFault
 		escrow.FaultAttribution = vtypes.FaultAttributionNoFault
 	case vtypes.ProviderDepositStatusSlashed:
-		if err = k.sendModuleToDistribution(ctx, escrow.ProviderDeposit); err != nil {
+		if err = k.fundCommunityPool(ctx, escrow.ProviderDeposit); err != nil {
 			return err
 		}
 		escrow.SettlementReason = vtypes.AuditEscrowSettlementReasonProviderFault
@@ -1763,7 +1766,7 @@ func (k *keeper) resolveDiscrepancyAuditorBond(ctx sdk.Context, auditor sdk.AccA
 	}
 
 	if slash {
-		if err := k.sendModuleToDistribution(ctx, record.BondAmount); err != nil {
+		if err := k.fundCommunityPool(ctx, record.BondAmount); err != nil {
 			return err
 		}
 		record.BondAmount = sdk.NewCoin(record.BondAmount.Denom, math.ZeroInt())
