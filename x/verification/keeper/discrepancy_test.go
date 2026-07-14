@@ -220,6 +220,22 @@ func TestResolveDiscrepancySettlesAttestationsAndAuditorBonds(t *testing.T) {
 	require.Equal(t, vtypes.DepositStatusSlashed, attestationB.DepositStatus)
 	require.Equal(t, vtypes.FaultAttributionAuditorFault, attestationB.FaultAttribution)
 
+	escrowA, found := k.GetAuditEscrow(ctx, attestationA.AuditEscrowID)
+	require.True(t, found)
+	require.Equal(t, vtypes.AuditEscrowStatusSettled, escrowA.Status)
+	require.Equal(t, vtypes.FeeStatusReleasedToAuditor, escrowA.FeeStatus)
+	require.Equal(t, vtypes.ProviderDepositStatusReturnedToProvider, escrowA.ProviderDepositStatus)
+	require.Equal(t, vtypes.AuditEscrowSettlementReasonNoFault, escrowA.SettlementReason)
+	require.Equal(t, vtypes.FaultAttributionNoFault, escrowA.FaultAttribution)
+
+	escrowB, found := k.GetAuditEscrow(ctx, attestationB.AuditEscrowID)
+	require.True(t, found)
+	require.Equal(t, vtypes.AuditEscrowStatusSettled, escrowB.Status)
+	require.Equal(t, vtypes.FeeStatusReturnedToProvider, escrowB.FeeStatus)
+	require.Equal(t, vtypes.ProviderDepositStatusReturnedToProvider, escrowB.ProviderDepositStatus)
+	require.Equal(t, vtypes.AuditEscrowSettlementReasonNoFault, escrowB.SettlementReason)
+	require.Equal(t, vtypes.FaultAttributionNoFault, escrowB.FaultAttribution)
+
 	auditorARecord, found := k.GetAuditor(ctx, auditorA)
 	require.True(t, found)
 	require.Equal(t, vtypes.BondStatusBonded, auditorARecord.BondStatus)
@@ -240,11 +256,76 @@ func TestResolveDiscrepancySettlesAttestationsAndAuditorBonds(t *testing.T) {
 	require.Equal(t, []bankTransfer{
 		{to: auditorA, module: moduletypes.ModuleName, amt: sdk.NewCoins(params.MinFeeL1)},
 		{to: auditorA, module: moduletypes.ModuleName, amt: sdk.NewCoins(params.AttestationDeposit)},
+		{to: provider, module: moduletypes.ModuleName, amt: sdk.NewCoins(params.ProviderAuditDeposit)},
 		{to: provider, module: moduletypes.ModuleName, amt: sdk.NewCoins(params.MinFeeL3)},
+		{to: provider, module: moduletypes.ModuleName, amt: sdk.NewCoins(params.ProviderAuditDeposit)},
 	}, bank.moduleToAccount)
 	require.Equal(t, []bankTransfer{
 		{fromModule: moduletypes.ModuleName, toModule: distrtypes.ModuleName, amt: sdk.NewCoins(params.AttestationDeposit)},
 		{fromModule: moduletypes.ModuleName, toModule: distrtypes.ModuleName, amt: sdk.NewCoins(params.BondL4)},
+	}, bank.moduleToModule)
+}
+
+func TestResolveDiscrepancySlashesProviderDepositsOnProviderFault(t *testing.T) {
+	bank := &recordingBank{}
+	ctx, k := setupStoreKeeperWithOptions(t, WithAuthority("gov"), WithBankKeeper(bank))
+	provider := testutil.AccAddress(t)
+	auditorA := testutil.AccAddress(t)
+	auditorB := testutil.AccAddress(t)
+	params := k.GetParams(ctx)
+
+	setupPendingDiscrepancy(t, ctx, k, provider, auditorA, auditorB)
+
+	err := k.ResolveDiscrepancy(
+		ctx,
+		"gov",
+		1,
+		"",
+		false,
+		false,
+		vtypes.DiscrepancyResolutionReasonProviderFault,
+		vtypes.FaultAttributionProviderFault,
+		testHash(),
+	)
+	require.NoError(t, err)
+
+	attestationA, found := k.GetAttestation(ctx, provider, auditorA)
+	require.True(t, found)
+	require.Equal(t, vtypes.FeeStatusReleasedToAuditor, attestationA.FeeStatus)
+	require.Equal(t, vtypes.DepositStatusReturnedToAuditor, attestationA.DepositStatus)
+	require.Equal(t, vtypes.FaultAttributionProviderFault, attestationA.FaultAttribution)
+
+	attestationB, found := k.GetAttestation(ctx, provider, auditorB)
+	require.True(t, found)
+	require.Equal(t, vtypes.FeeStatusReleasedToAuditor, attestationB.FeeStatus)
+	require.Equal(t, vtypes.DepositStatusReturnedToAuditor, attestationB.DepositStatus)
+	require.Equal(t, vtypes.FaultAttributionProviderFault, attestationB.FaultAttribution)
+
+	escrowA, found := k.GetAuditEscrow(ctx, attestationA.AuditEscrowID)
+	require.True(t, found)
+	require.Equal(t, vtypes.AuditEscrowStatusSettled, escrowA.Status)
+	require.Equal(t, vtypes.FeeStatusReleasedToAuditor, escrowA.FeeStatus)
+	require.Equal(t, vtypes.ProviderDepositStatusSlashed, escrowA.ProviderDepositStatus)
+	require.Equal(t, vtypes.AuditEscrowSettlementReasonProviderFault, escrowA.SettlementReason)
+	require.Equal(t, vtypes.FaultAttributionProviderFault, escrowA.FaultAttribution)
+
+	escrowB, found := k.GetAuditEscrow(ctx, attestationB.AuditEscrowID)
+	require.True(t, found)
+	require.Equal(t, vtypes.AuditEscrowStatusSettled, escrowB.Status)
+	require.Equal(t, vtypes.FeeStatusReleasedToAuditor, escrowB.FeeStatus)
+	require.Equal(t, vtypes.ProviderDepositStatusSlashed, escrowB.ProviderDepositStatus)
+	require.Equal(t, vtypes.AuditEscrowSettlementReasonProviderFault, escrowB.SettlementReason)
+	require.Equal(t, vtypes.FaultAttributionProviderFault, escrowB.FaultAttribution)
+
+	require.Equal(t, []bankTransfer{
+		{to: auditorA, module: moduletypes.ModuleName, amt: sdk.NewCoins(params.MinFeeL1)},
+		{to: auditorA, module: moduletypes.ModuleName, amt: sdk.NewCoins(params.AttestationDeposit)},
+		{to: auditorB, module: moduletypes.ModuleName, amt: sdk.NewCoins(params.MinFeeL3)},
+		{to: auditorB, module: moduletypes.ModuleName, amt: sdk.NewCoins(params.AttestationDeposit)},
+	}, bank.moduleToAccount)
+	require.Equal(t, []bankTransfer{
+		{fromModule: moduletypes.ModuleName, toModule: distrtypes.ModuleName, amt: sdk.NewCoins(params.ProviderAuditDeposit)},
+		{fromModule: moduletypes.ModuleName, toModule: distrtypes.ModuleName, amt: sdk.NewCoins(params.ProviderAuditDeposit)},
 	}, bank.moduleToModule)
 }
 
@@ -278,6 +359,22 @@ func TestEndBlockerTimesOutPendingDiscrepancy(t *testing.T) {
 	require.Equal(t, vtypes.DepositStatusSlashed, attestationB.DepositStatus)
 	require.Equal(t, vtypes.FaultAttributionInconclusive, attestationB.FaultAttribution)
 
+	escrowA, found := k.GetAuditEscrow(ctx, attestationA.AuditEscrowID)
+	require.True(t, found)
+	require.Equal(t, vtypes.AuditEscrowStatusSettled, escrowA.Status)
+	require.Equal(t, vtypes.FeeStatusReturnedToProvider, escrowA.FeeStatus)
+	require.Equal(t, vtypes.ProviderDepositStatusReturnedToProvider, escrowA.ProviderDepositStatus)
+	require.Equal(t, vtypes.AuditEscrowSettlementReasonNoFault, escrowA.SettlementReason)
+	require.Equal(t, vtypes.FaultAttributionNoFault, escrowA.FaultAttribution)
+
+	escrowB, found := k.GetAuditEscrow(ctx, attestationB.AuditEscrowID)
+	require.True(t, found)
+	require.Equal(t, vtypes.AuditEscrowStatusSettled, escrowB.Status)
+	require.Equal(t, vtypes.FeeStatusReturnedToProvider, escrowB.FeeStatus)
+	require.Equal(t, vtypes.ProviderDepositStatusReturnedToProvider, escrowB.ProviderDepositStatus)
+	require.Equal(t, vtypes.AuditEscrowSettlementReasonNoFault, escrowB.SettlementReason)
+	require.Equal(t, vtypes.FaultAttributionNoFault, escrowB.FaultAttribution)
+
 	auditorARecord, found := k.GetAuditor(ctx, auditorA)
 	require.True(t, found)
 	require.Equal(t, vtypes.BondStatusBonded, auditorARecord.BondStatus)
@@ -294,7 +391,9 @@ func TestEndBlockerTimesOutPendingDiscrepancy(t *testing.T) {
 
 	require.Equal(t, []bankTransfer{
 		{to: provider, module: moduletypes.ModuleName, amt: sdk.NewCoins(params.MinFeeL1)},
+		{to: provider, module: moduletypes.ModuleName, amt: sdk.NewCoins(params.ProviderAuditDeposit)},
 		{to: provider, module: moduletypes.ModuleName, amt: sdk.NewCoins(params.MinFeeL3)},
+		{to: provider, module: moduletypes.ModuleName, amt: sdk.NewCoins(params.ProviderAuditDeposit)},
 	}, bank.moduleToAccount)
 	require.Equal(t, []bankTransfer{
 		{fromModule: moduletypes.ModuleName, toModule: distrtypes.ModuleName, amt: sdk.NewCoins(params.AttestationDeposit)},
@@ -317,20 +416,40 @@ func setupPendingDiscrepancy(t testing.TB, ctx sdk.Context, k Keeper, provider, 
 	require.NoError(t, k.SetAuditor(ctx, auditorBRecord))
 
 	attestationA := attestationRecord(provider, auditorA)
+	attestationA.AuditEscrowID = 1
 	attestationA.Tier = vtypes.TierIdentified
 	attestationA.Fee = params.MinFeeL1
 	attestationA.Status = vtypes.AttestationStatusVoided
 	attestationA.VoidedReason = vtypes.VoidedReasonDiscrepancy
 	attestationA.DepositStatus = vtypes.DepositStatusPendingDiscrepancy
 	require.NoError(t, k.SetAttestation(ctx, attestationA))
+	require.NoError(t, k.SetAuditEscrow(ctx, consumedAuditEscrowRecord(
+		ctx,
+		provider,
+		auditorA,
+		attestationA.AuditEscrowID,
+		attestationA.Tier,
+		attestationA.Fee,
+		params,
+	)))
 
 	attestationB := attestationRecord(provider, auditorB)
+	attestationB.AuditEscrowID = 2
 	attestationB.Tier = vtypes.TierEstablished
 	attestationB.Fee = params.MinFeeL3
 	attestationB.Status = vtypes.AttestationStatusVoided
 	attestationB.VoidedReason = vtypes.VoidedReasonDiscrepancy
 	attestationB.DepositStatus = vtypes.DepositStatusPendingDiscrepancy
 	require.NoError(t, k.SetAttestation(ctx, attestationB))
+	require.NoError(t, k.SetAuditEscrow(ctx, consumedAuditEscrowRecord(
+		ctx,
+		provider,
+		auditorB,
+		attestationB.AuditEscrowID,
+		attestationB.Tier,
+		attestationB.Fee,
+		params,
+	)))
 
 	k.SetDiscrepancy(ctx, vtypes.DiscrepancyEvent{
 		ID:               1,

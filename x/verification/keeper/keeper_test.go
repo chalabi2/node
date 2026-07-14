@@ -25,7 +25,8 @@ func TestKeeperShell(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Equal(t, SettlementResult{
-		FeeStatus:     vtypes.FeeStatusReleasedToAuditor,
-		DepositStatus: vtypes.DepositStatusReturnedToAuditor,
+		FeeStatus:             vtypes.FeeStatusReleasedToAuditor,
+		DepositStatus:         vtypes.DepositStatusReturnedToAuditor,
+		ProviderDepositStatus: vtypes.ProviderDepositStatusReturnedToProvider,
 	}, got)
 }

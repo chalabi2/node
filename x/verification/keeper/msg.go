@@ -675,29 +675,7 @@ func (k *keeper) settleReplacedAttestation(ctx sdk.Context, provider, auditor sd
 	if err != nil {
 		return vtypes.AttestationRecord{}, false, err
 	}
-	escrow, err := k.consumedAttestationEscrow(ctx, provider, auditor, attestation)
-	if err != nil {
-		return vtypes.AttestationRecord{}, false, err
-	}
-	if err = k.settleAttestationFunds(ctx, provider, auditor, attestation, result); err != nil {
-		return vtypes.AttestationRecord{}, false, err
-	}
-	if err = k.sendModuleToAccount(ctx, provider, escrow.ProviderDeposit); err != nil {
-		return vtypes.AttestationRecord{}, false, err
-	}
-	escrow.Status = vtypes.AuditEscrowStatusSettled
-	escrow.FeeStatus = result.FeeStatus
-	escrow.ProviderDepositStatus = vtypes.ProviderDepositStatusReturnedToProvider
-	escrow.SettlementReason = vtypes.AuditEscrowSettlementReasonNoFault
-	escrow.FaultAttribution = vtypes.FaultAttributionNoFault
-	if err = k.SetAuditEscrow(ctx, escrow); err != nil {
-		return vtypes.AttestationRecord{}, false, err
-	}
-	if err = ctx.EventManager().EmitTypedEvent(&vtypes.EventAuditEscrowSettled{
-		AuditEscrowID:    escrow.ID,
-		Reason:           escrow.SettlementReason,
-		FaultAttribution: escrow.FaultAttribution,
-	}); err != nil {
+	if err = k.settleConsumedAttestation(ctx, provider, auditor, attestation, result); err != nil {
 		return vtypes.AttestationRecord{}, false, err
 	}
 	return attestation, true, nil
@@ -734,7 +712,7 @@ func (k *keeper) RevokeAttestation(
 	if err != nil {
 		return err
 	}
-	if err = k.settleAttestationFunds(ctx, provider, auditor, attestation, result); err != nil {
+	if err = k.settleConsumedAttestation(ctx, provider, auditor, attestation, result); err != nil {
 		return err
 	}
 
@@ -769,17 +747,7 @@ func (k *keeper) RemoveAttestation(ctx sdk.Context, provider sdk.AccAddress, aud
 	if err != nil {
 		return err
 	}
-	if err = requireEscrowedAttestationFunds(attestation); err != nil {
-		return err
-	}
-	escrow, err := k.consumedAttestationEscrow(ctx, provider, auditor, attestation)
-	if err != nil {
-		return err
-	}
-	if err = k.settleAttestationFunds(ctx, provider, auditor, attestation, result); err != nil {
-		return err
-	}
-	if err = k.sendModuleToAccount(ctx, provider, escrow.ProviderDeposit); err != nil {
+	if err = k.settleConsumedAttestation(ctx, provider, auditor, attestation, result); err != nil {
 		return err
 	}
 
@@ -787,22 +755,10 @@ func (k *keeper) RemoveAttestation(ctx sdk.Context, provider sdk.AccAddress, aud
 	attestation.FeeStatus = result.FeeStatus
 	attestation.DepositStatus = result.DepositStatus
 	attestation.FaultAttribution = vtypes.FaultAttributionNoFault
-	escrow.Status = vtypes.AuditEscrowStatusSettled
-	escrow.FeeStatus = result.FeeStatus
-	escrow.ProviderDepositStatus = vtypes.ProviderDepositStatusReturnedToProvider
-	escrow.SettlementReason = vtypes.AuditEscrowSettlementReasonNoFault
-	escrow.FaultAttribution = vtypes.FaultAttributionNoFault
-	if err = k.SetAuditEscrow(ctx, escrow); err != nil {
-		return err
-	}
 	if err = k.SetAttestation(ctx, attestation); err != nil {
 		return err
 	}
-	return ctx.EventManager().EmitTypedEvent(&vtypes.EventAuditEscrowSettled{
-		AuditEscrowID:    escrow.ID,
-		Reason:           escrow.SettlementReason,
-		FaultAttribution: escrow.FaultAttribution,
-	})
+	return nil
 }
 
 func (k *keeper) RevokeProviderAttestation(
@@ -947,7 +903,7 @@ func (k *keeper) voidGovernanceAttestation(
 	result SettlementResult,
 	fault vtypes.FaultAttribution,
 ) error {
-	if err := k.settleAttestationFunds(ctx, provider, auditor, attestation, result); err != nil {
+	if err := k.settleConsumedAttestation(ctx, provider, auditor, attestation, result); err != nil {
 		return err
 	}
 
@@ -1149,7 +1105,7 @@ func (k *keeper) voidUnsupportedProviderAttestations(ctx sdk.Context, provider s
 		if err != nil {
 			return err
 		}
-		if err = k.settleAttestationFunds(ctx, provider, auditor, attestation, result); err != nil {
+		if err = k.settleConsumedAttestation(ctx, provider, auditor, attestation, result); err != nil {
 			return err
 		}
 
@@ -1609,6 +1565,71 @@ func (k *keeper) settlePendingDiscrepancyAttestationFunds(ctx sdk.Context, provi
 	return nil
 }
 
+func (k *keeper) settleConsumedAttestation(
+	ctx sdk.Context,
+	provider sdk.AccAddress,
+	auditor sdk.AccAddress,
+	attestation vtypes.AttestationRecord,
+	result SettlementResult,
+) error {
+	pendingDiscrepancy := false
+	switch attestation.DepositStatus {
+	case vtypes.DepositStatusEscrowed:
+		if err := requireEscrowedAttestationFunds(attestation); err != nil {
+			return err
+		}
+	case vtypes.DepositStatusPendingDiscrepancy:
+		if attestation.FeeStatus != vtypes.FeeStatusEscrowed {
+			return moduletypes.ErrInvalidReason
+		}
+		pendingDiscrepancy = true
+	default:
+		return errorsmod.Wrapf(moduletypes.ErrInvalidReason, "unsupported attestation deposit state %s", attestation.DepositStatus)
+	}
+
+	escrow, err := k.consumedAttestationEscrow(ctx, provider, auditor, attestation)
+	if err != nil {
+		return err
+	}
+	if pendingDiscrepancy {
+		err = k.settlePendingDiscrepancyAttestationFunds(ctx, provider, auditor, attestation, result)
+	} else {
+		err = k.settleAttestationFunds(ctx, provider, auditor, attestation, result)
+	}
+	if err != nil {
+		return err
+	}
+
+	escrow.Status = vtypes.AuditEscrowStatusSettled
+	escrow.FeeStatus = result.FeeStatus
+	switch result.ProviderDepositStatus {
+	case vtypes.ProviderDepositStatusReturnedToProvider:
+		if err = k.sendModuleToAccount(ctx, provider, escrow.ProviderDeposit); err != nil {
+			return err
+		}
+		escrow.SettlementReason = vtypes.AuditEscrowSettlementReasonNoFault
+		escrow.FaultAttribution = vtypes.FaultAttributionNoFault
+	case vtypes.ProviderDepositStatusSlashed:
+		if err = k.sendModuleToDistribution(ctx, escrow.ProviderDeposit); err != nil {
+			return err
+		}
+		escrow.SettlementReason = vtypes.AuditEscrowSettlementReasonProviderFault
+		escrow.FaultAttribution = vtypes.FaultAttributionProviderFault
+	case vtypes.ProviderDepositStatusEscrowed, vtypes.ProviderDepositStatusUnspecified:
+		return errorsmod.Wrapf(moduletypes.ErrInvalidReason, "unsupported consumed escrow deposit settlement %s", result.ProviderDepositStatus)
+	}
+	escrow.ProviderDepositStatus = result.ProviderDepositStatus
+
+	if err = k.SetAuditEscrow(ctx, escrow); err != nil {
+		return err
+	}
+	return ctx.EventManager().EmitTypedEvent(&vtypes.EventAuditEscrowSettled{
+		AuditEscrowID:    escrow.ID,
+		Reason:           escrow.SettlementReason,
+		FaultAttribution: escrow.FaultAttribution,
+	})
+}
+
 func (k *keeper) settleDiscrepancyAttestations(ctx sdk.Context, discrepancy vtypes.DiscrepancyEvent, reason vtypes.DiscrepancyResolutionReason) error {
 	provider, err := sdk.AccAddressFromBech32(discrepancy.Provider)
 	if err != nil {
@@ -1636,10 +1657,10 @@ func (k *keeper) settleDiscrepancyAttestations(ctx sdk.Context, discrepancy vtyp
 	if err != nil {
 		return err
 	}
-	if err = k.settlePendingDiscrepancyAttestationFunds(ctx, provider, auditorA, attestationA, resultA); err != nil {
+	if err = k.settleConsumedAttestation(ctx, provider, auditorA, attestationA, resultA); err != nil {
 		return err
 	}
-	if err = k.settlePendingDiscrepancyAttestationFunds(ctx, provider, auditorB, attestationB, resultB); err != nil {
+	if err = k.settleConsumedAttestation(ctx, provider, auditorB, attestationB, resultB); err != nil {
 		return err
 	}
 
@@ -1662,12 +1683,14 @@ func (k *keeper) settleDiscrepancyAttestations(ctx sdk.Context, discrepancy vtyp
 
 func discrepancyAttestationSettlementResults(reason vtypes.DiscrepancyResolutionReason) (SettlementResult, SettlementResult, error) {
 	released := SettlementResult{
-		FeeStatus:     vtypes.FeeStatusReleasedToAuditor,
-		DepositStatus: vtypes.DepositStatusReturnedToAuditor,
+		FeeStatus:             vtypes.FeeStatusReleasedToAuditor,
+		DepositStatus:         vtypes.DepositStatusReturnedToAuditor,
+		ProviderDepositStatus: vtypes.ProviderDepositStatusReturnedToProvider,
 	}
 	slashed := SettlementResult{
-		FeeStatus:     vtypes.FeeStatusReturnedToProvider,
-		DepositStatus: vtypes.DepositStatusSlashed,
+		FeeStatus:             vtypes.FeeStatusReturnedToProvider,
+		DepositStatus:         vtypes.DepositStatusSlashed,
+		ProviderDepositStatus: vtypes.ProviderDepositStatusReturnedToProvider,
 	}
 
 	switch reason {
@@ -1675,8 +1698,10 @@ func discrepancyAttestationSettlementResults(reason vtypes.DiscrepancyResolution
 		return released, slashed, nil
 	case vtypes.DiscrepancyResolutionReasonAuditorBCorrect:
 		return slashed, released, nil
-	case vtypes.DiscrepancyResolutionReasonProviderFault,
-		vtypes.DiscrepancyResolutionReasonEvidenceInconclusive:
+	case vtypes.DiscrepancyResolutionReasonProviderFault:
+		released.ProviderDepositStatus = vtypes.ProviderDepositStatusSlashed
+		return released, released, nil
+	case vtypes.DiscrepancyResolutionReasonEvidenceInconclusive:
 		return released, released, nil
 	case vtypes.DiscrepancyResolutionReasonBothAuditorsWrong,
 		vtypes.DiscrepancyResolutionReasonSharedFault,

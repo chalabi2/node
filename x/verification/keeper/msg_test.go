@@ -676,8 +676,19 @@ func TestRevokeAttestationDisposition(t *testing.T) {
 			ctx, k := setupStoreKeeperWithOptions(t, WithBankKeeper(bank))
 			provider := testutil.AccAddress(t)
 			auditor := testutil.AccAddress(t)
+			params := k.GetParams(ctx)
 			attestation := attestationRecord(provider, auditor)
 			require.NoError(t, k.SetAttestation(ctx, attestation))
+			escrow := consumedAuditEscrowRecord(
+				ctx,
+				provider,
+				auditor,
+				attestation.AuditEscrowID,
+				attestation.Tier,
+				attestation.Fee,
+				params,
+			)
+			require.NoError(t, k.SetAuditEscrow(ctx, escrow))
 
 			err := k.RevokeAttestation(ctx, provider, auditor, tc.reason, testHash())
 			require.NoError(t, err)
@@ -689,10 +700,23 @@ func TestRevokeAttestationDisposition(t *testing.T) {
 			require.Equal(t, tc.wantFeeStatus, got.FeeStatus)
 			require.Equal(t, tc.wantDepositStatus, got.DepositStatus)
 
-			wantAccountTxs := make([]bankTransfer, 0, len(tc.wantAccountTxs))
+			settledEscrow, found := k.GetAuditEscrow(ctx, attestation.AuditEscrowID)
+			require.True(t, found)
+			require.Equal(t, vtypes.AuditEscrowStatusSettled, settledEscrow.Status)
+			require.Equal(t, tc.wantFeeStatus, settledEscrow.FeeStatus)
+			require.Equal(t, vtypes.ProviderDepositStatusReturnedToProvider, settledEscrow.ProviderDepositStatus)
+			require.Equal(t, vtypes.AuditEscrowSettlementReasonNoFault, settledEscrow.SettlementReason)
+			require.Equal(t, vtypes.FaultAttributionNoFault, settledEscrow.FaultAttribution)
+
+			wantAccountTxs := make([]bankTransfer, 0, len(tc.wantAccountTxs)+1)
 			for _, build := range tc.wantAccountTxs {
 				wantAccountTxs = append(wantAccountTxs, build(provider, auditor, attestation))
 			}
+			wantAccountTxs = append(wantAccountTxs, bankTransfer{
+				to:     provider,
+				module: moduletypes.ModuleName,
+				amt:    sdk.NewCoins(escrow.ProviderDeposit),
+			})
 			wantModuleTxs := make([]bankTransfer, 0, len(tc.wantModuleTxs))
 			for _, build := range tc.wantModuleTxs {
 				wantModuleTxs = append(wantModuleTxs, build(attestation))
@@ -703,6 +727,11 @@ func TestRevokeAttestationDisposition(t *testing.T) {
 			} else {
 				require.Equal(t, wantModuleTxs, bank.moduleToModule)
 			}
+			testutil.EnsureEvent(t, ctx.EventManager().Events().ToABCIEvents(), &vtypes.EventAuditEscrowSettled{
+				AuditEscrowID:    attestation.AuditEscrowID,
+				Reason:           vtypes.AuditEscrowSettlementReasonNoFault,
+				FaultAttribution: vtypes.FaultAttributionNoFault,
+			})
 		})
 	}
 }
@@ -953,8 +982,19 @@ func TestRevokeProviderAttestationVoidsSingleAttestation(t *testing.T) {
 			ctx, k := setupStoreKeeperWithOptions(t, WithAuthority("gov"), WithBankKeeper(bank))
 			provider := testutil.AccAddress(t)
 			auditor := testutil.AccAddress(t)
+			params := k.GetParams(ctx)
 			attestation := attestationRecord(provider, auditor)
 			require.NoError(t, k.SetAttestation(ctx, attestation))
+			escrow := consumedAuditEscrowRecord(
+				ctx,
+				provider,
+				auditor,
+				attestation.AuditEscrowID,
+				attestation.Tier,
+				attestation.Fee,
+				params,
+			)
+			require.NoError(t, k.SetAuditEscrow(ctx, escrow))
 
 			err := k.RevokeProviderAttestation(ctx, "gov", provider, auditor, tc.reason, tc.fault, testHash())
 			require.NoError(t, err)
@@ -967,13 +1007,37 @@ func TestRevokeProviderAttestationVoidsSingleAttestation(t *testing.T) {
 			require.Equal(t, tc.wantFeeStatus, got.FeeStatus)
 			require.Equal(t, tc.wantDepositStatus, got.DepositStatus)
 
-			wantAccountTxs := make([]bankTransfer, 0, len(tc.wantAccountTxs))
+			settledEscrow, found := k.GetAuditEscrow(ctx, attestation.AuditEscrowID)
+			require.True(t, found)
+			require.Equal(t, vtypes.AuditEscrowStatusSettled, settledEscrow.Status)
+			require.Equal(t, tc.wantFeeStatus, settledEscrow.FeeStatus)
+
+			wantAccountTxs := make([]bankTransfer, 0, len(tc.wantAccountTxs)+1)
 			for _, build := range tc.wantAccountTxs {
 				wantAccountTxs = append(wantAccountTxs, build(provider, auditor, attestation))
 			}
-			wantModuleTxs := make([]bankTransfer, 0, len(tc.wantModuleTxs))
+			wantModuleTxs := make([]bankTransfer, 0, len(tc.wantModuleTxs)+1)
 			for _, build := range tc.wantModuleTxs {
 				wantModuleTxs = append(wantModuleTxs, build(attestation))
+			}
+			if tc.fault == vtypes.FaultAttributionProviderFault {
+				require.Equal(t, vtypes.ProviderDepositStatusSlashed, settledEscrow.ProviderDepositStatus)
+				require.Equal(t, vtypes.AuditEscrowSettlementReasonProviderFault, settledEscrow.SettlementReason)
+				require.Equal(t, vtypes.FaultAttributionProviderFault, settledEscrow.FaultAttribution)
+				wantModuleTxs = append(wantModuleTxs, bankTransfer{
+					fromModule: moduletypes.ModuleName,
+					toModule:   distrtypes.ModuleName,
+					amt:        sdk.NewCoins(escrow.ProviderDeposit),
+				})
+			} else {
+				require.Equal(t, vtypes.ProviderDepositStatusReturnedToProvider, settledEscrow.ProviderDepositStatus)
+				require.Equal(t, vtypes.AuditEscrowSettlementReasonNoFault, settledEscrow.SettlementReason)
+				require.Equal(t, vtypes.FaultAttributionNoFault, settledEscrow.FaultAttribution)
+				wantAccountTxs = append(wantAccountTxs, bankTransfer{
+					to:     provider,
+					module: moduletypes.ModuleName,
+					amt:    sdk.NewCoins(escrow.ProviderDeposit),
+				})
 			}
 			require.Equal(t, wantAccountTxs, bank.moduleToAccount)
 			if len(wantModuleTxs) == 0 {
@@ -996,10 +1060,19 @@ func TestRevokeAllProviderAttestationsVoidsActiveProviderAttestations(t *testing
 	provider := testutil.AccAddress(t)
 	auditorA := testutil.AccAddress(t)
 	auditorB := testutil.AccAddress(t)
+	params := k.GetParams(ctx)
 	attestationA := attestationRecord(provider, auditorA)
+	attestationA.AuditEscrowID = 1
 	attestationB := attestationRecord(provider, auditorB)
+	attestationB.AuditEscrowID = 2
 	require.NoError(t, k.SetAttestation(ctx, attestationA))
 	require.NoError(t, k.SetAttestation(ctx, attestationB))
+	require.NoError(t, k.SetAuditEscrow(ctx, consumedAuditEscrowRecord(
+		ctx, provider, auditorA, attestationA.AuditEscrowID, attestationA.Tier, attestationA.Fee, params,
+	)))
+	require.NoError(t, k.SetAuditEscrow(ctx, consumedAuditEscrowRecord(
+		ctx, provider, auditorB, attestationB.AuditEscrowID, attestationB.Tier, attestationB.Fee, params,
+	)))
 
 	otherProvider := testutil.AccAddress(t)
 	otherAttestation := attestationRecord(otherProvider, auditorA)
@@ -1023,6 +1096,16 @@ func TestRevokeAllProviderAttestationsVoidsActiveProviderAttestations(t *testing
 	require.True(t, found)
 	require.Equal(t, vtypes.AttestationStatusVoided, gotB.Status)
 	require.Equal(t, vtypes.VoidedReasonGovernance, gotB.VoidedReason)
+	escrowA, found := k.GetAuditEscrow(ctx, attestationA.AuditEscrowID)
+	require.True(t, found)
+	require.Equal(t, vtypes.AuditEscrowStatusSettled, escrowA.Status)
+	require.Equal(t, vtypes.ProviderDepositStatusSlashed, escrowA.ProviderDepositStatus)
+	require.Equal(t, vtypes.AuditEscrowSettlementReasonProviderFault, escrowA.SettlementReason)
+	escrowB, found := k.GetAuditEscrow(ctx, attestationB.AuditEscrowID)
+	require.True(t, found)
+	require.Equal(t, vtypes.AuditEscrowStatusSettled, escrowB.Status)
+	require.Equal(t, vtypes.ProviderDepositStatusSlashed, escrowB.ProviderDepositStatus)
+	require.Equal(t, vtypes.AuditEscrowSettlementReasonProviderFault, escrowB.SettlementReason)
 	otherGot, found := k.GetAttestation(ctx, otherProvider, auditorA)
 	require.True(t, found)
 	require.Equal(t, vtypes.AttestationStatusValid, otherGot.Status)
@@ -1033,7 +1116,10 @@ func TestRevokeAllProviderAttestationsVoidsActiveProviderAttestations(t *testing
 		{to: auditorB, module: moduletypes.ModuleName, amt: sdk.NewCoins(attestationB.Fee)},
 		{to: auditorB, module: moduletypes.ModuleName, amt: sdk.NewCoins(attestationB.Deposit)},
 	}, bank.moduleToAccount)
-	require.Empty(t, bank.moduleToModule)
+	require.ElementsMatch(t, []bankTransfer{
+		{fromModule: moduletypes.ModuleName, toModule: distrtypes.ModuleName, amt: sdk.NewCoins(params.ProviderAuditDeposit)},
+		{fromModule: moduletypes.ModuleName, toModule: distrtypes.ModuleName, amt: sdk.NewCoins(params.ProviderAuditDeposit)},
+	}, bank.moduleToModule)
 }
 
 func TestRevokeAuditorAttestationsVoidsWorkAndSlashesBond(t *testing.T) {
@@ -1041,15 +1127,24 @@ func TestRevokeAuditorAttestationsVoidsWorkAndSlashesBond(t *testing.T) {
 	ctx, k := setupStoreKeeperWithOptions(t, WithAuthority("gov"), WithBankKeeper(bank))
 	auditor := testutil.AccAddress(t)
 	otherAuditor := testutil.AccAddress(t)
+	params := k.GetParams(ctx)
 	auditorRecord := auditorRecord(auditor)
 	require.NoError(t, k.SetAuditor(ctx, auditorRecord))
 
 	providerA := testutil.AccAddress(t)
 	providerB := testutil.AccAddress(t)
 	attestationA := attestationRecord(providerA, auditor)
+	attestationA.AuditEscrowID = 1
 	attestationB := attestationRecord(providerB, auditor)
+	attestationB.AuditEscrowID = 2
 	require.NoError(t, k.SetAttestation(ctx, attestationA))
 	require.NoError(t, k.SetAttestation(ctx, attestationB))
+	require.NoError(t, k.SetAuditEscrow(ctx, consumedAuditEscrowRecord(
+		ctx, providerA, auditor, attestationA.AuditEscrowID, attestationA.Tier, attestationA.Fee, params,
+	)))
+	require.NoError(t, k.SetAuditEscrow(ctx, consumedAuditEscrowRecord(
+		ctx, providerB, auditor, attestationB.AuditEscrowID, attestationB.Tier, attestationB.Fee, params,
+	)))
 
 	otherAttestation := attestationRecord(providerA, otherAuditor)
 	require.NoError(t, k.SetAttestation(ctx, otherAttestation))
@@ -1074,6 +1169,16 @@ func TestRevokeAuditorAttestationsVoidsWorkAndSlashesBond(t *testing.T) {
 	require.Equal(t, vtypes.AttestationStatusVoided, gotB.Status)
 	require.Equal(t, vtypes.FeeStatusReturnedToProvider, gotB.FeeStatus)
 	require.Equal(t, vtypes.DepositStatusSlashed, gotB.DepositStatus)
+	escrowA, found := k.GetAuditEscrow(ctx, attestationA.AuditEscrowID)
+	require.True(t, found)
+	require.Equal(t, vtypes.AuditEscrowStatusSettled, escrowA.Status)
+	require.Equal(t, vtypes.ProviderDepositStatusReturnedToProvider, escrowA.ProviderDepositStatus)
+	require.Equal(t, vtypes.AuditEscrowSettlementReasonNoFault, escrowA.SettlementReason)
+	escrowB, found := k.GetAuditEscrow(ctx, attestationB.AuditEscrowID)
+	require.True(t, found)
+	require.Equal(t, vtypes.AuditEscrowStatusSettled, escrowB.Status)
+	require.Equal(t, vtypes.ProviderDepositStatusReturnedToProvider, escrowB.ProviderDepositStatus)
+	require.Equal(t, vtypes.AuditEscrowSettlementReasonNoFault, escrowB.SettlementReason)
 	otherGot, found := k.GetAttestation(ctx, providerA, otherAuditor)
 	require.True(t, found)
 	require.Equal(t, vtypes.AttestationStatusValid, otherGot.Status)
@@ -1085,7 +1190,9 @@ func TestRevokeAuditorAttestationsVoidsWorkAndSlashesBond(t *testing.T) {
 
 	require.ElementsMatch(t, []bankTransfer{
 		{to: providerA, module: moduletypes.ModuleName, amt: sdk.NewCoins(attestationA.Fee)},
+		{to: providerA, module: moduletypes.ModuleName, amt: sdk.NewCoins(params.ProviderAuditDeposit)},
 		{to: providerB, module: moduletypes.ModuleName, amt: sdk.NewCoins(attestationB.Fee)},
+		{to: providerB, module: moduletypes.ModuleName, amt: sdk.NewCoins(params.ProviderAuditDeposit)},
 	}, bank.moduleToAccount)
 	require.ElementsMatch(t, []bankTransfer{
 		{fromModule: moduletypes.ModuleName, toModule: distrtypes.ModuleName, amt: sdk.NewCoins(attestationA.Deposit)},
@@ -1296,10 +1403,20 @@ func TestWithdrawProviderBondVoidsUnsupportedAttestations(t *testing.T) {
 			ctx, k := setupStoreKeeperWithOptions(t, WithBankKeeper(bank))
 			provider := testutil.AccAddress(t)
 			auditor := testutil.AccAddress(t)
+			params := k.GetParams(ctx)
 			attestation := attestationRecord(provider, auditor)
 			require.NoError(t, k.SetProviderBond(ctx, providerBondRecord(provider)))
 			require.NoError(t, k.SetProviderSnapshot(ctx, providerSnapshotRecord(provider)))
 			require.NoError(t, k.SetAttestation(ctx, attestation))
+			require.NoError(t, k.SetAuditEscrow(ctx, consumedAuditEscrowRecord(
+				ctx,
+				provider,
+				auditor,
+				attestation.AuditEscrowID,
+				attestation.Tier,
+				attestation.Fee,
+				params,
+			)))
 
 			err := k.WithdrawProviderBond(ctx, provider, tc.amount)
 			require.NoError(t, err)
@@ -1318,10 +1435,21 @@ func TestWithdrawProviderBondVoidsUnsupportedAttestations(t *testing.T) {
 			if tc.wantStatus == vtypes.AttestationStatusVoided {
 				require.Equal(t, vtypes.FeeStatusReleasedToAuditor, got.FeeStatus)
 				require.Equal(t, vtypes.DepositStatusReturnedToAuditor, got.DepositStatus)
+				escrow, found := k.GetAuditEscrow(ctx, attestation.AuditEscrowID)
+				require.True(t, found)
+				require.Equal(t, vtypes.AuditEscrowStatusSettled, escrow.Status)
+				require.Equal(t, vtypes.ProviderDepositStatusReturnedToProvider, escrow.ProviderDepositStatus)
+				require.Equal(t, vtypes.AuditEscrowSettlementReasonNoFault, escrow.SettlementReason)
 				require.Equal(t, []bankTransfer{
 					{to: auditor, module: moduletypes.ModuleName, amt: sdk.NewCoins(attestation.Fee)},
 					{to: auditor, module: moduletypes.ModuleName, amt: sdk.NewCoins(attestation.Deposit)},
+					{to: provider, module: moduletypes.ModuleName, amt: sdk.NewCoins(params.ProviderAuditDeposit)},
 				}, bank.moduleToAccount)
+			} else {
+				escrow, found := k.GetAuditEscrow(ctx, attestation.AuditEscrowID)
+				require.True(t, found)
+				require.Equal(t, vtypes.AuditEscrowStatusConsumed, escrow.Status)
+				require.Empty(t, bank.moduleToAccount)
 			}
 		})
 	}
@@ -1401,9 +1529,20 @@ func TestSlashProviderBondLeavesSupportedAttestationsValid(t *testing.T) {
 	ctx, k := setupStoreKeeperWithOptions(t, WithAuthority("gov"), WithBankKeeper(bank))
 	provider := testutil.AccAddress(t)
 	auditor := testutil.AccAddress(t)
+	params := k.GetParams(ctx)
+	originalAttestation := attestationRecord(provider, auditor)
 	require.NoError(t, k.SetProviderBond(ctx, providerBondRecord(provider)))
 	require.NoError(t, k.SetProviderSnapshot(ctx, providerSnapshotRecord(provider)))
-	require.NoError(t, k.SetAttestation(ctx, attestationRecord(provider, auditor)))
+	require.NoError(t, k.SetAttestation(ctx, originalAttestation))
+	require.NoError(t, k.SetAuditEscrow(ctx, consumedAuditEscrowRecord(
+		ctx,
+		provider,
+		auditor,
+		originalAttestation.AuditEscrowID,
+		originalAttestation.Tier,
+		originalAttestation.Fee,
+		params,
+	)))
 
 	err := k.SlashProviderBond(
 		ctx,
@@ -1426,9 +1565,20 @@ func TestSlashProviderBondSlashesFundsAndVoidsAttestations(t *testing.T) {
 	ctx, k := setupStoreKeeperWithOptions(t, WithAuthority("gov"), WithBankKeeper(bank))
 	provider := testutil.AccAddress(t)
 	auditor := testutil.AccAddress(t)
+	params := k.GetParams(ctx)
+	originalAttestation := attestationRecord(provider, auditor)
 	require.NoError(t, k.SetProviderBond(ctx, providerBondRecord(provider)))
 	require.NoError(t, k.SetProviderSnapshot(ctx, providerSnapshotRecord(provider)))
-	require.NoError(t, k.SetAttestation(ctx, attestationRecord(provider, auditor)))
+	require.NoError(t, k.SetAttestation(ctx, originalAttestation))
+	require.NoError(t, k.SetAuditEscrow(ctx, consumedAuditEscrowRecord(
+		ctx,
+		provider,
+		auditor,
+		originalAttestation.AuditEscrowID,
+		originalAttestation.Tier,
+		originalAttestation.Fee,
+		params,
+	)))
 
 	err := k.SlashProviderBond(
 		ctx,
@@ -1454,9 +1604,15 @@ func TestSlashProviderBondSlashesFundsAndVoidsAttestations(t *testing.T) {
 	require.Equal(t, vtypes.FeeStatusReleasedToAuditor, attestation.FeeStatus)
 	require.Equal(t, vtypes.DepositStatusReturnedToAuditor, attestation.DepositStatus)
 	require.Equal(t, vtypes.FaultAttributionProviderFault, attestation.FaultAttribution)
+	escrow, found := k.GetAuditEscrow(ctx, originalAttestation.AuditEscrowID)
+	require.True(t, found)
+	require.Equal(t, vtypes.AuditEscrowStatusSettled, escrow.Status)
+	require.Equal(t, vtypes.ProviderDepositStatusReturnedToProvider, escrow.ProviderDepositStatus)
+	require.Equal(t, vtypes.AuditEscrowSettlementReasonNoFault, escrow.SettlementReason)
 	require.Equal(t, []bankTransfer{
-		{to: auditor, module: moduletypes.ModuleName, amt: sdk.NewCoins(attestationRecord(provider, auditor).Fee)},
-		{to: auditor, module: moduletypes.ModuleName, amt: sdk.NewCoins(attestationRecord(provider, auditor).Deposit)},
+		{to: auditor, module: moduletypes.ModuleName, amt: sdk.NewCoins(originalAttestation.Fee)},
+		{to: auditor, module: moduletypes.ModuleName, amt: sdk.NewCoins(originalAttestation.Deposit)},
+		{to: provider, module: moduletypes.ModuleName, amt: sdk.NewCoins(params.ProviderAuditDeposit)},
 	}, bank.moduleToAccount)
 	require.Equal(t, []bankTransfer{
 		{fromModule: moduletypes.ModuleName, toModule: distrtypes.ModuleName, amt: sdk.NewCoins(sdk.NewInt64Coin(bondDenom, 100000000))},
@@ -1705,6 +1861,32 @@ func openAuditEscrowRecord(ctx sdk.Context, provider sdk.AccAddress, id uint64, 
 		ProviderDepositStatus: vtypes.ProviderDepositStatusEscrowed,
 		Status:                vtypes.AuditEscrowStatusOpen,
 		OpenedAt:              ctx.BlockTime(),
+		ExpiresAt:             ctx.BlockTime().Add(params.TtlL1),
+	}
+}
+
+func consumedAuditEscrowRecord(
+	ctx sdk.Context,
+	provider sdk.AccAddress,
+	auditor sdk.AccAddress,
+	id uint64,
+	tier vtypes.VerificationTier,
+	fee sdk.Coin,
+	params vtypes.Params,
+) vtypes.AuditEscrowRecord {
+	consumedAt := ctx.BlockTime()
+	return vtypes.AuditEscrowRecord{
+		ID:                    id,
+		Provider:              provider.String(),
+		ConsumedByAuditor:     auditor.String(),
+		RequestedTier:         tier,
+		Fee:                   fee,
+		FeeStatus:             vtypes.FeeStatusEscrowed,
+		ProviderDeposit:       params.ProviderAuditDeposit,
+		ProviderDepositStatus: vtypes.ProviderDepositStatusEscrowed,
+		Status:                vtypes.AuditEscrowStatusConsumed,
+		OpenedAt:              ctx.BlockTime(),
+		ConsumedAt:            &consumedAt,
 		ExpiresAt:             ctx.BlockTime().Add(params.TtlL1),
 	}
 }

@@ -64,7 +64,7 @@ func (k *keeper) processAttestationExpiryQueue(ctx sdk.Context, blockTime time.T
 		if err != nil {
 			return err
 		}
-		if err = k.settleAttestationFunds(ctx, provider, auditor, attestation, result); err != nil {
+		if err = k.settleConsumedAttestation(ctx, provider, auditor, attestation, result); err != nil {
 			return err
 		}
 
@@ -201,8 +201,9 @@ func (k *keeper) processDiscrepancyTimeoutQueue(ctx sdk.Context, blockTime time.
 		}
 
 		result := SettlementResult{
-			FeeStatus:     vtypes.FeeStatusReturnedToProvider,
-			DepositStatus: vtypes.DepositStatusSlashed,
+			FeeStatus:             vtypes.FeeStatusReturnedToProvider,
+			DepositStatus:         vtypes.DepositStatusSlashed,
+			ProviderDepositStatus: vtypes.ProviderDepositStatusReturnedToProvider,
 		}
 		if err = k.timeoutDiscrepancyAttestation(ctx, discrepancy.Provider, discrepancy.AuditorA, result); err != nil {
 			return err
@@ -252,7 +253,7 @@ func (k *keeper) timeoutDiscrepancyAttestation(ctx sdk.Context, providerString, 
 	if !found {
 		return moduletypes.ErrAttestationNotFound
 	}
-	if err = k.settlePendingDiscrepancyAttestationFunds(ctx, provider, auditor, attestation, result); err != nil {
+	if err = k.settleConsumedAttestation(ctx, provider, auditor, attestation, result); err != nil {
 		return err
 	}
 	attestation.FeeStatus = result.FeeStatus
