@@ -51,8 +51,9 @@ func TestSettleDispositionMatrix(t *testing.T) {
 				FaultAttribution: vtypes.FaultAttributionAuditorFault,
 			},
 			want: SettlementResult{
-				FeeStatus:     vtypes.FeeStatusReturnedToProvider,
-				DepositStatus: vtypes.DepositStatusSlashed,
+				FeeStatus:             vtypes.FeeStatusReturnedToProvider,
+				DepositStatus:         vtypes.DepositStatusSlashed,
+				ProviderDepositStatus: vtypes.ProviderDepositStatusReturnedToProvider,
 			},
 		},
 		{
@@ -63,8 +64,9 @@ func TestSettleDispositionMatrix(t *testing.T) {
 				FaultAttribution: vtypes.FaultAttributionNoFault,
 			},
 			want: SettlementResult{
-				FeeStatus:     vtypes.FeeStatusReturnedToProvider,
-				DepositStatus: vtypes.DepositStatusReturnedToAuditor,
+				FeeStatus:             vtypes.FeeStatusReturnedToProvider,
+				DepositStatus:         vtypes.DepositStatusReturnedToAuditor,
+				ProviderDepositStatus: vtypes.ProviderDepositStatusReturnedToProvider,
 			},
 		},
 		{
@@ -81,8 +83,9 @@ func TestSettleDispositionMatrix(t *testing.T) {
 				Path: SettlementPathAttestationPendingDiscrepancy,
 			},
 			want: SettlementResult{
-				FeeStatus:     vtypes.FeeStatusEscrowed,
-				DepositStatus: vtypes.DepositStatusPendingDiscrepancy,
+				FeeStatus:             vtypes.FeeStatusEscrowed,
+				DepositStatus:         vtypes.DepositStatusPendingDiscrepancy,
+				ProviderDepositStatus: vtypes.ProviderDepositStatusEscrowed,
 			},
 		},
 		{
@@ -93,8 +96,9 @@ func TestSettleDispositionMatrix(t *testing.T) {
 				FaultAttribution:  vtypes.FaultAttributionAuditorFault,
 			},
 			want: SettlementResult{
-				FeeStatus:     vtypes.FeeStatusReturnedToProvider,
-				DepositStatus: vtypes.DepositStatusSlashed,
+				FeeStatus:             vtypes.FeeStatusReturnedToProvider,
+				DepositStatus:         vtypes.DepositStatusSlashed,
+				ProviderDepositStatus: vtypes.ProviderDepositStatusReturnedToProvider,
 			},
 		},
 		{
@@ -104,7 +108,11 @@ func TestSettleDispositionMatrix(t *testing.T) {
 				DiscrepancyReason: vtypes.DiscrepancyResolutionReasonProviderFault,
 				FaultAttribution:  vtypes.FaultAttributionProviderFault,
 			},
-			want: feeToAuditorDepositReturned(),
+			want: SettlementResult{
+				FeeStatus:             vtypes.FeeStatusReleasedToAuditor,
+				DepositStatus:         vtypes.DepositStatusReturnedToAuditor,
+				ProviderDepositStatus: vtypes.ProviderDepositStatusSlashed,
+			},
 		},
 		{
 			name: "discrepancy resolved shared fault",
@@ -114,8 +122,9 @@ func TestSettleDispositionMatrix(t *testing.T) {
 				FaultAttribution:  vtypes.FaultAttributionSharedFault,
 			},
 			want: SettlementResult{
-				FeeStatus:     vtypes.FeeStatusReturnedToProvider,
-				DepositStatus: vtypes.DepositStatusSlashed,
+				FeeStatus:             vtypes.FeeStatusReturnedToProvider,
+				DepositStatus:         vtypes.DepositStatusSlashed,
+				ProviderDepositStatus: vtypes.ProviderDepositStatusReturnedToProvider,
 			},
 		},
 		{
@@ -124,8 +133,9 @@ func TestSettleDispositionMatrix(t *testing.T) {
 				Path: SettlementPathDiscrepancyTimedOut,
 			},
 			want: SettlementResult{
-				FeeStatus:     vtypes.FeeStatusReturnedToProvider,
-				DepositStatus: vtypes.DepositStatusSlashed,
+				FeeStatus:             vtypes.FeeStatusReturnedToProvider,
+				DepositStatus:         vtypes.DepositStatusSlashed,
+				ProviderDepositStatus: vtypes.ProviderDepositStatusReturnedToProvider,
 			},
 		},
 		{
@@ -136,7 +146,11 @@ func TestSettleDispositionMatrix(t *testing.T) {
 				FaultAttribution:    vtypes.FaultAttributionProviderFault,
 				SlashAuditorDeposit: true,
 			},
-			want: feeToAuditorDepositReturned(),
+			want: SettlementResult{
+				FeeStatus:             vtypes.FeeStatusReleasedToAuditor,
+				DepositStatus:         vtypes.DepositStatusReturnedToAuditor,
+				ProviderDepositStatus: vtypes.ProviderDepositStatusSlashed,
+			},
 		},
 		{
 			name: "governance no fault",
@@ -156,8 +170,9 @@ func TestSettleDispositionMatrix(t *testing.T) {
 				SlashAuditorDeposit: true,
 			},
 			want: SettlementResult{
-				FeeStatus:     vtypes.FeeStatusReturnedToProvider,
-				DepositStatus: vtypes.DepositStatusSlashed,
+				FeeStatus:             vtypes.FeeStatusReturnedToProvider,
+				DepositStatus:         vtypes.DepositStatusSlashed,
+				ProviderDepositStatus: vtypes.ProviderDepositStatusReturnedToProvider,
 			},
 		},
 		{
@@ -169,8 +184,9 @@ func TestSettleDispositionMatrix(t *testing.T) {
 				SlashAuditorDeposit: true,
 			},
 			want: SettlementResult{
-				FeeStatus:     vtypes.FeeStatusReturnedToProvider,
-				DepositStatus: vtypes.DepositStatusSlashed,
+				FeeStatus:             vtypes.FeeStatusReturnedToProvider,
+				DepositStatus:         vtypes.DepositStatusSlashed,
+				ProviderDepositStatus: vtypes.ProviderDepositStatusReturnedToProvider,
 			},
 		},
 		{
@@ -298,8 +314,9 @@ func TestSettleRejectsInvalidReason(t *testing.T) {
 
 func feeToAuditorDepositReturned() SettlementResult {
 	return SettlementResult{
-		FeeStatus:     vtypes.FeeStatusReleasedToAuditor,
-		DepositStatus: vtypes.DepositStatusReturnedToAuditor,
+		FeeStatus:             vtypes.FeeStatusReleasedToAuditor,
+		DepositStatus:         vtypes.DepositStatusReturnedToAuditor,
+		ProviderDepositStatus: vtypes.ProviderDepositStatusReturnedToProvider,
 	}
 }
 

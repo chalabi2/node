@@ -54,15 +54,17 @@ func Settle(input SettlementInput) (SettlementResult, error) {
 		return settleAttestationNoFault(input)
 	case SettlementPathAttestationPendingDiscrepancy:
 		return SettlementResult{
-			FeeStatus:     vtypes.FeeStatusEscrowed,
-			DepositStatus: vtypes.DepositStatusPendingDiscrepancy,
+			FeeStatus:             vtypes.FeeStatusEscrowed,
+			DepositStatus:         vtypes.DepositStatusPendingDiscrepancy,
+			ProviderDepositStatus: vtypes.ProviderDepositStatusEscrowed,
 		}, nil
 	case SettlementPathDiscrepancyResolved:
 		return settleDiscrepancy(input)
 	case SettlementPathDiscrepancyTimedOut:
 		return SettlementResult{
-			FeeStatus:     vtypes.FeeStatusReturnedToProvider,
-			DepositStatus: vtypes.DepositStatusSlashed,
+			FeeStatus:             vtypes.FeeStatusReturnedToProvider,
+			DepositStatus:         vtypes.DepositStatusSlashed,
+			ProviderDepositStatus: vtypes.ProviderDepositStatusReturnedToProvider,
 		}, nil
 	case SettlementPathGovernanceAttestation:
 		return settleGovernanceAttestation(input)
@@ -87,8 +89,9 @@ func settleAttestationNoFault(input SettlementInput) (SettlementResult, error) {
 	}
 
 	return SettlementResult{
-		FeeStatus:     vtypes.FeeStatusReleasedToAuditor,
-		DepositStatus: vtypes.DepositStatusReturnedToAuditor,
+		FeeStatus:             vtypes.FeeStatusReleasedToAuditor,
+		DepositStatus:         vtypes.DepositStatusReturnedToAuditor,
+		ProviderDepositStatus: vtypes.ProviderDepositStatusReturnedToProvider,
 	}, nil
 }
 
@@ -98,8 +101,9 @@ func settleProviderFaultAttestation(input SettlementInput) (SettlementResult, er
 	}
 
 	return SettlementResult{
-		FeeStatus:     vtypes.FeeStatusReleasedToAuditor,
-		DepositStatus: vtypes.DepositStatusReturnedToAuditor,
+		FeeStatus:             vtypes.FeeStatusReleasedToAuditor,
+		DepositStatus:         vtypes.DepositStatusReturnedToAuditor,
+		ProviderDepositStatus: vtypes.ProviderDepositStatusReturnedToProvider,
 	}, nil
 }
 
@@ -111,18 +115,21 @@ func settleRevocation(input SettlementInput) (SettlementResult, error) {
 	switch input.RevocationReason {
 	case vtypes.AttestationRevocationReasonAuditorEvidenceError:
 		return SettlementResult{
-			FeeStatus:     vtypes.FeeStatusReturnedToProvider,
-			DepositStatus: vtypes.DepositStatusSlashed,
+			FeeStatus:             vtypes.FeeStatusReturnedToProvider,
+			DepositStatus:         vtypes.DepositStatusSlashed,
+			ProviderDepositStatus: vtypes.ProviderDepositStatusReturnedToProvider,
 		}, nil
 	case vtypes.AttestationRevocationReasonAuditorOperationalExit:
 		return SettlementResult{
-			FeeStatus:     vtypes.FeeStatusReturnedToProvider,
-			DepositStatus: vtypes.DepositStatusReturnedToAuditor,
+			FeeStatus:             vtypes.FeeStatusReturnedToProvider,
+			DepositStatus:         vtypes.DepositStatusReturnedToAuditor,
+			ProviderDepositStatus: vtypes.ProviderDepositStatusReturnedToProvider,
 		}, nil
 	default:
 		return SettlementResult{
-			FeeStatus:     vtypes.FeeStatusReleasedToAuditor,
-			DepositStatus: vtypes.DepositStatusReturnedToAuditor,
+			FeeStatus:             vtypes.FeeStatusReleasedToAuditor,
+			DepositStatus:         vtypes.DepositStatusReturnedToAuditor,
+			ProviderDepositStatus: vtypes.ProviderDepositStatusReturnedToProvider,
 		}, nil
 	}
 }
@@ -133,15 +140,23 @@ func settleDiscrepancy(input SettlementInput) (SettlementResult, error) {
 	}
 
 	switch input.FaultAttribution {
-	case vtypes.FaultAttributionProviderFault, vtypes.FaultAttributionNoFault:
+	case vtypes.FaultAttributionProviderFault:
 		return SettlementResult{
-			FeeStatus:     vtypes.FeeStatusReleasedToAuditor,
-			DepositStatus: vtypes.DepositStatusReturnedToAuditor,
+			FeeStatus:             vtypes.FeeStatusReleasedToAuditor,
+			DepositStatus:         vtypes.DepositStatusReturnedToAuditor,
+			ProviderDepositStatus: vtypes.ProviderDepositStatusSlashed,
+		}, nil
+	case vtypes.FaultAttributionNoFault:
+		return SettlementResult{
+			FeeStatus:             vtypes.FeeStatusReleasedToAuditor,
+			DepositStatus:         vtypes.DepositStatusReturnedToAuditor,
+			ProviderDepositStatus: vtypes.ProviderDepositStatusReturnedToProvider,
 		}, nil
 	case vtypes.FaultAttributionAuditorFault, vtypes.FaultAttributionSharedFault:
 		return SettlementResult{
-			FeeStatus:     vtypes.FeeStatusReturnedToProvider,
-			DepositStatus: vtypes.DepositStatusSlashed,
+			FeeStatus:             vtypes.FeeStatusReturnedToProvider,
+			DepositStatus:         vtypes.DepositStatusSlashed,
+			ProviderDepositStatus: vtypes.ProviderDepositStatusReturnedToProvider,
 		}, nil
 	default:
 		return SettlementResult{}, errorsmod.Wrapf(moduletypes.ErrInvalidFaultAttribution, "unsupported discrepancy fault %s", input.FaultAttribution)
@@ -154,15 +169,23 @@ func settleGovernanceAttestation(input SettlementInput) (SettlementResult, error
 	}
 
 	switch input.FaultAttribution {
-	case vtypes.FaultAttributionProviderFault, vtypes.FaultAttributionNoFault:
+	case vtypes.FaultAttributionProviderFault:
 		return SettlementResult{
-			FeeStatus:     vtypes.FeeStatusReleasedToAuditor,
-			DepositStatus: vtypes.DepositStatusReturnedToAuditor,
+			FeeStatus:             vtypes.FeeStatusReleasedToAuditor,
+			DepositStatus:         vtypes.DepositStatusReturnedToAuditor,
+			ProviderDepositStatus: vtypes.ProviderDepositStatusSlashed,
+		}, nil
+	case vtypes.FaultAttributionNoFault:
+		return SettlementResult{
+			FeeStatus:             vtypes.FeeStatusReleasedToAuditor,
+			DepositStatus:         vtypes.DepositStatusReturnedToAuditor,
+			ProviderDepositStatus: vtypes.ProviderDepositStatusReturnedToProvider,
 		}, nil
 	case vtypes.FaultAttributionAuditorFault, vtypes.FaultAttributionSharedFault:
 		result := SettlementResult{
-			FeeStatus:     vtypes.FeeStatusReturnedToProvider,
-			DepositStatus: vtypes.DepositStatusReturnedToAuditor,
+			FeeStatus:             vtypes.FeeStatusReturnedToProvider,
+			DepositStatus:         vtypes.DepositStatusReturnedToAuditor,
+			ProviderDepositStatus: vtypes.ProviderDepositStatusReturnedToProvider,
 		}
 		if input.SlashAuditorDeposit {
 			result.DepositStatus = vtypes.DepositStatusSlashed

@@ -14,7 +14,10 @@ type BankKeeper interface {
 	GetBalance(ctx context.Context, addr sdk.AccAddress, denom string) sdk.Coin
 	SendCoinsFromAccountToModule(ctx context.Context, senderAddr sdk.AccAddress, recipientModule string, amt sdk.Coins) error
 	SendCoinsFromModuleToAccount(ctx context.Context, senderModule string, recipientAddr sdk.AccAddress, amt sdk.Coins) error
-	SendCoinsFromModuleToModule(ctx context.Context, senderModule, recipientModule string, amt sdk.Coins) error
+}
+
+type DistributionKeeper interface {
+	FundCommunityPool(ctx context.Context, amount sdk.Coins, sender sdk.AccAddress) error
 }
 
 type ProviderKeeper interface {
@@ -37,6 +40,12 @@ func WithAuthority(authority string) Option {
 func WithBankKeeper(bank BankKeeper) Option {
 	return func(k *keeper) {
 		k.bank = bank
+	}
+}
+
+func WithDistributionKeeper(distribution DistributionKeeper) Option {
+	return func(k *keeper) {
+		k.distribution = distribution
 	}
 }
 
