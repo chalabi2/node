@@ -2,6 +2,7 @@ package keeper_test
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -40,6 +41,84 @@ func Test_GetOrder(t *testing.T) {
 		_, ok := keeper.GetOrder(ctx, testutil.OrderID(t))
 		require.False(t, ok)
 	}
+}
+
+func Test_GetProviderLeaseStats(t *testing.T) {
+	_, k, suite := setupKeeper(t)
+	ctx := suite.Context()
+	provider := testutil.AccAddress(t)
+
+	_, failures, found := k.GetProviderLeaseStats(ctx, provider, time.Time{})
+	require.False(t, found)
+	require.Empty(t, failures)
+
+	ownerClosed := saveActiveLeaseForProvider(t, ctx, k, provider)
+	require.NoError(t, k.OnLeaseClosed(ctx, ownerClosed, mv1.LeaseClosed, mv1.LeaseClosedReasonOwner))
+
+	providerFailed := saveActiveLeaseForProvider(t, ctx, k, provider)
+	require.NoError(t, k.OnLeaseClosed(ctx, providerFailed, mv1.LeaseClosed, mv1.LeaseClosedReasonUnstable))
+
+	insufficientFunds := saveActiveLeaseForProvider(t, ctx, k, provider)
+	require.NoError(t, k.OnLeaseClosed(ctx, insufficientFunds, mv1.LeaseInsufficientFunds, mv1.LeaseClosedReasonInsufficientFunds))
+
+	closed, found := k.GetLease(ctx, providerFailed.ID)
+	require.True(t, found)
+	require.NoError(t, k.OnLeaseClosed(ctx, closed, mv1.LeaseClosed, mv1.LeaseClosedReasonUnspecified))
+
+	completed, failures, found := k.GetProviderLeaseStats(ctx, provider, time.Time{})
+	require.True(t, found)
+	require.Equal(t, uint64(2), completed)
+	require.Equal(t, map[mv1.LeaseClosedReason]uint64{
+		mv1.LeaseClosedReasonUnstable: 1,
+	}, failures)
+}
+
+func Test_GetProviderLeaseStatsSince(t *testing.T) {
+	_, k, suite := setupKeeper(t)
+	provider := testutil.AccAddress(t)
+	oldTime := time.Date(2026, 6, 22, 10, 0, 0, 0, time.UTC)
+	newTime := oldTime.Add(time.Hour)
+
+	ctx := suite.Context().WithBlockTime(oldTime)
+	ownerClosed := saveActiveLeaseForProvider(t, ctx, k, provider)
+	require.NoError(t, k.OnLeaseClosed(ctx, ownerClosed, mv1.LeaseClosed, mv1.LeaseClosedReasonOwner))
+
+	ctx = ctx.WithBlockTime(newTime)
+	providerFailed := saveActiveLeaseForProvider(t, ctx, k, provider)
+	require.NoError(t, k.OnLeaseClosed(ctx, providerFailed, mv1.LeaseClosed, mv1.LeaseClosedReasonUnstable))
+
+	completed, failures, found := k.GetProviderLeaseStats(ctx, provider, newTime)
+	require.True(t, found)
+	require.Zero(t, completed)
+	require.Equal(t, map[mv1.LeaseClosedReason]uint64{
+		mv1.LeaseClosedReasonUnstable: 1,
+	}, failures)
+
+	completed, failures, found = k.GetProviderLeaseStats(ctx, provider, newTime.Add(time.Second))
+	require.False(t, found)
+	require.Zero(t, completed)
+	require.Empty(t, failures)
+}
+
+func Test_BackfillProviderLeaseStats(t *testing.T) {
+	_, k, suite := setupKeeper(t)
+	ctx := suite.Context()
+	provider := testutil.AccAddress(t)
+
+	saveLeaseForProvider(t, ctx, k, provider, mv1.LeaseClosed, mv1.LeaseClosedReasonOwner)
+	saveLeaseForProvider(t, ctx, k, provider, mv1.LeaseInsufficientFunds, mv1.LeaseClosedReasonInsufficientFunds)
+	saveLeaseForProvider(t, ctx, k, provider, mv1.LeaseClosed, mv1.LeaseClosedReasonUnstable)
+	saveLeaseForProvider(t, ctx, k, provider, mv1.LeaseActive, mv1.LeaseClosedReasonProvider)
+
+	require.NoError(t, k.BackfillProviderLeaseStats(ctx))
+	require.NoError(t, k.BackfillProviderLeaseStats(ctx))
+
+	completed, failures, found := k.GetProviderLeaseStats(ctx, provider, time.Time{})
+	require.True(t, found)
+	require.Equal(t, uint64(2), completed)
+	require.Equal(t, map[mv1.LeaseClosedReason]uint64{
+		mv1.LeaseClosedReasonUnstable: 1,
+	}, failures)
 }
 
 func Test_WithOrders(t *testing.T) {
@@ -494,6 +573,26 @@ func createBid(t testing.TB, suite *state.TestSuite) (mvbeta.Bid, mvbeta.Order) 
 	require.NoError(t, err)
 
 	return bid, order
+}
+
+func saveActiveLeaseForProvider(t testing.TB, ctx sdk.Context, k keeper.IKeeper, provider sdk.AccAddress) mv1.Lease {
+	t.Helper()
+
+	return saveLeaseForProvider(t, ctx, k, provider, mv1.LeaseActive, mv1.LeaseClosedReasonInvalid)
+}
+
+func saveLeaseForProvider(t testing.TB, ctx sdk.Context, k keeper.IKeeper, provider sdk.AccAddress, state mv1.Lease_State, reason mv1.LeaseClosedReason) mv1.Lease {
+	t.Helper()
+
+	id := testutil.LeaseIDForAccount(t, testutil.AccAddress(t), provider)
+	lease := mv1.Lease{
+		ID:     id,
+		State:  state,
+		Reason: reason,
+	}
+	require.NoError(t, k.SaveLease(ctx, lease))
+
+	return lease
 }
 
 func createOrder(t testing.TB, ctx sdk.Context, keeper keeper.IKeeper) (mvbeta.Order, dtypes.GroupSpec) {

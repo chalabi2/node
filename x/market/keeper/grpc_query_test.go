@@ -5,6 +5,7 @@ import (
 	"math"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -1239,4 +1240,61 @@ func TestGRPCQueryLeases(t *testing.T) {
 			require.Equal(t, tc.expLen, len(res.Leases))
 		})
 	}
+}
+
+func TestGRPCQueryProviderLeaseStats(t *testing.T) {
+	suite := setupTest(t)
+	provider := testutil.AccAddress(t)
+	blockTime := time.Date(2026, 6, 22, 10, 0, 0, 0, time.UTC)
+	suite.ctx = suite.ctx.WithBlockTime(blockTime)
+
+	ownerClosed := saveActiveLeaseForProvider(t, suite.ctx, suite.keeper, provider)
+	require.NoError(t, suite.keeper.OnLeaseClosed(suite.ctx, ownerClosed, mv1.LeaseClosed, mv1.LeaseClosedReasonOwner))
+
+	networkClosed := saveActiveLeaseForProvider(t, suite.ctx, suite.keeper, provider)
+	require.NoError(t, suite.keeper.OnLeaseClosed(suite.ctx, networkClosed, mv1.LeaseInsufficientFunds, mv1.LeaseClosedReasonInsufficientFunds))
+
+	unstable := saveActiveLeaseForProvider(t, suite.ctx, suite.keeper, provider)
+	require.NoError(t, suite.keeper.OnLeaseClosed(suite.ctx, unstable, mv1.LeaseClosed, mv1.LeaseClosedReasonUnstable))
+
+	manifestTimeout := saveActiveLeaseForProvider(t, suite.ctx, suite.keeper, provider)
+	require.NoError(t, suite.keeper.OnLeaseClosed(suite.ctx, manifestTimeout, mv1.LeaseClosed, mv1.LeaseClosedReasonManifestTimeout))
+
+	otherProviderLease := saveActiveLeaseForProvider(t, suite.ctx, suite.keeper, testutil.AccAddress(t))
+	require.NoError(t, suite.keeper.OnLeaseClosed(suite.ctx, otherProviderLease, mv1.LeaseClosed, mv1.LeaseClosedReasonUnstable))
+
+	res, err := suite.queryClient.ProviderLeaseStats(suite.ctx, &mvbeta.QueryProviderLeaseStatsRequest{
+		Provider: provider.String(),
+	})
+	require.NoError(t, err)
+	require.Equal(t, mv1.ProviderLeaseStats{
+		TotalLeases:             4,
+		CompletedLeases:         2,
+		ProviderFaultedLeases:   2,
+		TenantClosedLeases:      1,
+		InsufficientFundsLeases: 1,
+		ProviderFaults: []mv1.ProviderLeaseStatsByReason{
+			{Reason: mv1.LeaseClosedReasonUnstable, Count: 1},
+			{Reason: mv1.LeaseClosedReasonManifestTimeout, Count: 1},
+		},
+	}, res.Stats)
+
+	emptyProvider := testutil.AccAddress(t)
+	res, err = suite.queryClient.ProviderLeaseStats(suite.ctx, &mvbeta.QueryProviderLeaseStatsRequest{
+		Provider: emptyProvider.String(),
+	})
+	require.NoError(t, err)
+	require.Equal(t, mv1.ProviderLeaseStats{}, res.Stats)
+
+	res, err = suite.queryClient.ProviderLeaseStats(suite.ctx, &mvbeta.QueryProviderLeaseStatsRequest{
+		Provider: provider.String(),
+		Since:    blockTime.Add(time.Second),
+	})
+	require.NoError(t, err)
+	require.Equal(t, mv1.ProviderLeaseStats{}, res.Stats)
+
+	_, err = suite.queryClient.ProviderLeaseStats(suite.ctx, &mvbeta.QueryProviderLeaseStatsRequest{
+		Provider: "not-an-address",
+	})
+	require.Error(t, err)
 }
