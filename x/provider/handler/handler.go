@@ -7,8 +7,8 @@ import (
 
 	types "pkg.akt.dev/go/node/provider/v1beta4"
 
-	mkeeper "pkg.akt.dev/node/v2/x/market/keeper"
-	"pkg.akt.dev/node/v2/x/provider/keeper"
+	mkeeper "pkg.akt.dev/node/v3/x/market/keeper"
+	"pkg.akt.dev/node/v3/x/provider/keeper"
 )
 
 // NewHandler returns a handler for "provider" type messages.
@@ -27,6 +27,18 @@ func NewHandler(keeper keeper.IKeeper, mkeeper mkeeper.IKeeper) baseapp.MsgServi
 
 		case *types.MsgDeleteProvider:
 			res, err := ms.DeleteProvider(ctx, msg)
+			return sdk.WrapServiceResult(ctx, res, err)
+
+		case *types.MsgOpenProviderMaintenance:
+			res, err := ms.OpenProviderMaintenance(ctx, msg)
+			return sdk.WrapServiceResult(ctx, res, err)
+
+		case *types.MsgCloseProviderMaintenance:
+			res, err := ms.CloseProviderMaintenance(ctx, msg)
+			return sdk.WrapServiceResult(ctx, res, err)
+
+		case *types.MsgUpdateParams:
+			res, err := ms.UpdateParams(ctx, msg)
 			return sdk.WrapServiceResult(ctx, res, err)
 
 		default:

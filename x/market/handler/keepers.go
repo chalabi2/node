@@ -15,8 +15,9 @@ import (
 	escrowid "pkg.akt.dev/go/node/escrow/id/v1"
 	etypes "pkg.akt.dev/go/node/escrow/types/v1"
 	ptypes "pkg.akt.dev/go/node/provider/v1beta4"
+	vtypes "pkg.akt.dev/go/node/verification/v1"
 
-	"pkg.akt.dev/node/v2/x/market/keeper"
+	"pkg.akt.dev/node/v3/x/market/keeper"
 )
 
 type EscrowKeeper interface {
@@ -37,6 +38,10 @@ type ProviderKeeper interface {
 
 type AuditKeeper interface {
 	GetProviderAttributes(ctx sdk.Context, id sdk.Address) (atypes.AuditedProviders, bool)
+}
+
+type VerificationKeeper interface {
+	BidFilter(sdk.Context, sdk.AccAddress, *vtypes.VerificationRequirement) error
 }
 
 // DeploymentKeeper Interface includes deployment methods
@@ -60,12 +65,13 @@ type BankKeeper interface {
 
 // Keepers include all modules keepers
 type Keepers struct {
-	Escrow     EscrowKeeper
-	Market     keeper.IKeeper
-	Deployment DeploymentKeeper
-	Provider   ProviderKeeper
-	Audit      AuditKeeper
-	Account    govtypes.AccountKeeper
-	Authz      AuthzKeeper
-	Bank       BankKeeper
+	Escrow       EscrowKeeper
+	Market       keeper.IKeeper
+	Deployment   DeploymentKeeper
+	Provider     ProviderKeeper
+	Audit        AuditKeeper
+	Verification VerificationKeeper
+	Account      govtypes.AccountKeeper
+	Authz        AuthzKeeper
+	Bank         BankKeeper
 }

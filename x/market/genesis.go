@@ -10,8 +10,8 @@ import (
 	mv1 "pkg.akt.dev/go/node/market/v1"
 	mvbeta "pkg.akt.dev/go/node/market/v1beta5"
 
-	"pkg.akt.dev/node/v2/x/market/keeper"
-	"pkg.akt.dev/node/v2/x/market/keeper/keys"
+	"pkg.akt.dev/node/v3/x/market/keeper"
+	"pkg.akt.dev/node/v3/x/market/keeper/keys"
 )
 
 // ValidateGenesis does validation check of the Genesis
@@ -76,6 +76,10 @@ func InitGenesis(ctx sdk.Context, kpr keeper.IKeeper, data *mvbeta.GenesisState)
 		if err := k.Leases().Set(ctx, pk, record); err != nil {
 			panic(fmt.Errorf("market genesis leases init. lease id %s: %w", record.ID, err))
 		}
+	}
+
+	if err := k.BackfillProviderLeaseStats(ctx); err != nil {
+		panic(fmt.Errorf("market genesis lease stats init: %w", err))
 	}
 
 	err := kpr.SetParams(ctx, data.Params)

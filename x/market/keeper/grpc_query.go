@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -16,8 +17,8 @@ import (
 	v1 "pkg.akt.dev/go/node/market/v1"
 	types "pkg.akt.dev/go/node/market/v1beta5"
 
-	"pkg.akt.dev/node/v2/util/query"
-	"pkg.akt.dev/node/v2/x/market/keeper/keys"
+	"pkg.akt.dev/node/v3/util/query"
+	"pkg.akt.dev/node/v3/x/market/keeper/keys"
 )
 
 // Querier is used as Keeper will have duplicate methods if used directly, and gRPC names take precedence over keeper
@@ -1171,4 +1172,45 @@ func (k Querier) Params(ctx context.Context, req *types.QueryParamsRequest) (*ty
 	}
 
 	return &types.QueryParamsResponse{Params: params}, nil
+}
+
+func (k Querier) ProviderLeaseStats(ctx context.Context, req *types.QueryProviderLeaseStatsRequest) (*types.QueryProviderLeaseStatsResponse, error) {
+	if req == nil {
+		return nil, status.Errorf(codes.InvalidArgument, "empty request")
+	}
+
+	provider, err := sdk.AccAddressFromBech32(req.Provider)
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid provider: %s", err.Error())
+	}
+
+	sdkCtx := sdk.UnwrapSDKContext(ctx)
+	leaseStats := k.getProviderLeaseStats(sdkCtx, provider, req.GetSince())
+
+	var faulted uint64
+	reasons := make([]v1.LeaseClosedReason, 0, len(leaseStats.failures))
+	for reason, count := range leaseStats.failures {
+		faulted += count
+		reasons = append(reasons, reason)
+	}
+	sort.Slice(reasons, func(i, j int) bool {
+		return reasons[i] < reasons[j]
+	})
+
+	stats := v1.ProviderLeaseStats{
+		TotalLeases:             leaseStats.completed + faulted,
+		CompletedLeases:         leaseStats.completed,
+		ProviderFaultedLeases:   faulted,
+		ProviderFaults:          make([]v1.ProviderLeaseStatsByReason, 0, len(reasons)),
+		TenantClosedLeases:      leaseStats.completedByReason[v1.LeaseClosedReasonOwner],
+		InsufficientFundsLeases: leaseStats.completedByReason[v1.LeaseClosedReasonInsufficientFunds],
+	}
+	for _, reason := range reasons {
+		stats.ProviderFaults = append(stats.ProviderFaults, v1.ProviderLeaseStatsByReason{
+			Reason: reason,
+			Count:  leaseStats.failures[reason],
+		})
+	}
+
+	return &types.QueryProviderLeaseStatsResponse{Stats: stats}, nil
 }

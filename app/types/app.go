@@ -75,19 +75,21 @@ import (
 	wtypes "pkg.akt.dev/go/node/wasm/v1"
 	"pkg.akt.dev/go/sdkutil"
 
-	akeeper "pkg.akt.dev/node/v2/x/audit/keeper"
-	bmekeeper "pkg.akt.dev/node/v2/x/bme/keeper"
-	ckeeper "pkg.akt.dev/node/v2/x/cert/keeper"
-	dkeeper "pkg.akt.dev/node/v2/x/deployment/keeper"
-	epochskeeper "pkg.akt.dev/node/v2/x/epochs/keeper"
-	ekeeper "pkg.akt.dev/node/v2/x/escrow/keeper"
-	mhooks "pkg.akt.dev/node/v2/x/market/hooks"
-	mkeeper "pkg.akt.dev/node/v2/x/market/keeper"
-	okeeper "pkg.akt.dev/node/v2/x/oracle/keeper"
-	pkeeper "pkg.akt.dev/node/v2/x/provider/keeper"
-	awasm "pkg.akt.dev/node/v2/x/wasm"
-	wasmbindings "pkg.akt.dev/node/v2/x/wasm/bindings"
-	wkeeper "pkg.akt.dev/node/v2/x/wasm/keeper"
+	akeeper "pkg.akt.dev/node/v3/x/audit/keeper"
+	bmekeeper "pkg.akt.dev/node/v3/x/bme/keeper"
+	ckeeper "pkg.akt.dev/node/v3/x/cert/keeper"
+	dkeeper "pkg.akt.dev/node/v3/x/deployment/keeper"
+	epochskeeper "pkg.akt.dev/node/v3/x/epochs/keeper"
+	ekeeper "pkg.akt.dev/node/v3/x/escrow/keeper"
+	mhooks "pkg.akt.dev/node/v3/x/market/hooks"
+	mkeeper "pkg.akt.dev/node/v3/x/market/keeper"
+	okeeper "pkg.akt.dev/node/v3/x/oracle/keeper"
+	pkeeper "pkg.akt.dev/node/v3/x/provider/keeper"
+	verificationkeeper "pkg.akt.dev/node/v3/x/verification/keeper"
+	verificationtypes "pkg.akt.dev/node/v3/x/verification/types"
+	awasm "pkg.akt.dev/node/v3/x/wasm"
+	wasmbindings "pkg.akt.dev/node/v3/x/wasm/bindings"
+	wkeeper "pkg.akt.dev/node/v3/x/wasm/keeper"
 )
 
 const (
@@ -118,16 +120,17 @@ type AppKeepers struct {
 	}
 
 	Akash struct {
-		Audit      akeeper.Keeper
-		Bme        bmekeeper.Keeper
-		Cert       ckeeper.Keeper
-		Deployment dkeeper.IKeeper
-		Epochs     epochskeeper.Keeper
-		Escrow     ekeeper.Keeper
-		Market     mkeeper.IKeeper
-		Oracle     okeeper.Keeper
-		Provider   pkeeper.IKeeper
-		Wasm       wkeeper.Keeper
+		Audit        akeeper.Keeper
+		Bme          bmekeeper.Keeper
+		Cert         ckeeper.Keeper
+		Deployment   dkeeper.IKeeper
+		Epochs       epochskeeper.Keeper
+		Escrow       ekeeper.Keeper
+		Market       mkeeper.IKeeper
+		Oracle       okeeper.Keeper
+		Provider     pkeeper.IKeeper
+		Verification verificationkeeper.Keeper
+		Wasm         wkeeper.Keeper
 	}
 
 	Modules struct {
@@ -467,6 +470,16 @@ func (app *App) InitNormalKeepers(
 	app.Keepers.Akash.Provider = pkeeper.NewKeeper(
 		cdc,
 		app.keys[ptypes.StoreKey],
+		authtypes.NewModuleAddress(govtypes.ModuleName).String(),
+	)
+
+	app.Keepers.Akash.Verification = verificationkeeper.NewKeeper(
+		cdc,
+		app.keys[verificationtypes.StoreKey],
+		verificationkeeper.WithAuthority(authtypes.NewModuleAddress(govtypes.ModuleName).String()),
+		verificationkeeper.WithBankKeeper(app.Keepers.Cosmos.Bank),
+		verificationkeeper.WithProviderKeeper(app.Keepers.Akash.Provider),
+		verificationkeeper.WithMarketStatsKeeper(app.Keepers.Akash.Market),
 	)
 
 	app.Keepers.Akash.Audit = akeeper.NewKeeper(
@@ -626,6 +639,7 @@ func kvStoreKeys() []string {
 		dtypes.StoreKey,
 		mtypes.StoreKey,
 		ptypes.StoreKey,
+		verificationtypes.StoreKey,
 		atypes.StoreKey,
 		ctypes.StoreKey,
 		awasm.StoreKey,

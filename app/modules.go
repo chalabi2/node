@@ -34,16 +34,17 @@ import (
 
 	"pkg.akt.dev/go/sdkutil"
 
-	"pkg.akt.dev/node/v2/x/audit"
-	"pkg.akt.dev/node/v2/x/bme"
-	"pkg.akt.dev/node/v2/x/cert"
-	"pkg.akt.dev/node/v2/x/deployment"
-	"pkg.akt.dev/node/v2/x/epochs"
-	"pkg.akt.dev/node/v2/x/escrow"
-	"pkg.akt.dev/node/v2/x/market"
-	"pkg.akt.dev/node/v2/x/oracle"
-	"pkg.akt.dev/node/v2/x/provider"
-	awasm "pkg.akt.dev/node/v2/x/wasm"
+	"pkg.akt.dev/node/v3/x/audit"
+	"pkg.akt.dev/node/v3/x/bme"
+	"pkg.akt.dev/node/v3/x/cert"
+	"pkg.akt.dev/node/v3/x/deployment"
+	"pkg.akt.dev/node/v3/x/epochs"
+	"pkg.akt.dev/node/v3/x/escrow"
+	"pkg.akt.dev/node/v3/x/market"
+	"pkg.akt.dev/node/v3/x/oracle"
+	"pkg.akt.dev/node/v3/x/provider"
+	"pkg.akt.dev/node/v3/x/verification"
+	awasm "pkg.akt.dev/node/v3/x/wasm"
 )
 
 func appModules(
@@ -170,6 +171,7 @@ func appModules(
 			app.Keepers.Akash.Market,
 			app.Keepers.Akash.Escrow,
 			app.Keepers.Akash.Audit,
+			app.Keepers.Akash.Verification,
 			app.Keepers.Akash.Deployment,
 			app.Keepers.Akash.Provider,
 			app.Keepers.Cosmos.Acct,
@@ -182,6 +184,10 @@ func appModules(
 			app.Keepers.Cosmos.Acct,
 			app.Keepers.Cosmos.Bank,
 			app.Keepers.Akash.Market,
+		),
+		verification.NewAppModule(
+			app.cdc,
+			app.Keepers.Akash.Verification,
 		),
 		audit.NewAppModule(
 			app.cdc,
@@ -323,6 +329,7 @@ func appSimModules(
 			app.Keepers.Akash.Market,
 			app.Keepers.Akash.Escrow,
 			app.Keepers.Akash.Audit,
+			app.Keepers.Akash.Verification,
 			app.Keepers.Akash.Deployment,
 			app.Keepers.Akash.Provider,
 			app.Keepers.Cosmos.Acct,
@@ -335,6 +342,10 @@ func appSimModules(
 			app.Keepers.Cosmos.Acct,
 			app.Keepers.Cosmos.Bank,
 			app.Keepers.Akash.Market,
+		),
+		verification.NewAppModule(
+			app.cdc,
+			app.Keepers.Akash.Verification,
 		),
 		cert.NewAppModule(
 			app.cdc,
