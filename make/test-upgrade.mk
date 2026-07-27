@@ -88,11 +88,11 @@ test-reset:
 	$(ROOT_DIR)/script/upgrades.sh --workdir=$(AP_RUN_DIR) --config="$(PWD)/config.json" --uto=$(UPGRADE_TO) --snapshot-url=$(SNAPSHOT_URL) --chain-meta=$(CHAIN_METADATA_URL) --max-validators=$(MAX_VALIDATORS) clean
 	$(ROOT_DIR)/script/upgrades.sh --workdir=$(AP_RUN_DIR) --config="$(PWD)/config.json" --uto=$(UPGRADE_TO) --snapshot-url=$(SNAPSHOT_URL) --gbv=$(GENESIS_BINARY_VERSION) --chain-meta=$(CHAIN_METADATA_URL) bins
 	$(ROOT_DIR)/script/upgrades.sh --workdir=$(AP_RUN_DIR) --config="$(PWD)/config.json" --uto=$(UPGRADE_TO) --snapshot-url=$(SNAPSHOT_URL) --chain-meta=$(CHAIN_METADATA_URL) keys
-	$(ROOT_DIR)/script/upgrades.sh --workdir=$(AP_RUN_DIR) --config="$(PWD)/config.json" --state-config=$(STATE_CONFIG) --snapshot-url=$(SNAPSHOT_URL) --chain-meta=$(CHAIN_METADATA_URL) --max-validators=$(MAX_VALIDATORS) prepare-state
+	$(ROOT_DIR)/script/upgrades.sh --workdir=$(AP_RUN_DIR) --config="$(PWD)/config.json" --state-config=$(STATE_CONFIG) --snapshot-url=$(SNAPSHOT_URL) --chain-meta=$(CHAIN_METADATA_URL) --uto=$(UPGRADE_TO) --max-validators=$(MAX_VALIDATORS) prepare-state
 
 .PHONY: prepare-state
 prepare-state:
-	$(ROOT_DIR)/script/upgrades.sh --workdir=$(AP_RUN_DIR) --config="$(PWD)/config.json" --state-config=$(STATE_CONFIG) --chain-meta=$(CHAIN_METADATA_URL) --max-validators=$(MAX_VALIDATORS) prepare-state
+	$(ROOT_DIR)/script/upgrades.sh --workdir=$(AP_RUN_DIR) --config="$(PWD)/config.json" --state-config=$(STATE_CONFIG) --snapshot-url=$(SNAPSHOT_URL) --chain-meta=$(CHAIN_METADATA_URL) --uto=$(UPGRADE_TO) --max-validators=$(MAX_VALIDATORS) prepare-state
 
 .PHONY: bins
 bins:
