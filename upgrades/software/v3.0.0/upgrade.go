@@ -1,6 +1,6 @@
-// Package v2_1_0
+// Package v3_0_0
 // nolint revive
-package v2_1_0
+package v3_0_0
 
 import (
 	"context"
@@ -20,12 +20,12 @@ import (
 	otypes "pkg.akt.dev/go/node/oracle/v2"
 	"pkg.akt.dev/go/sdkutil"
 
-	apptypes "pkg.akt.dev/node/v2/app/types"
-	utypes "pkg.akt.dev/node/v2/upgrades/types"
+	apptypes "pkg.akt.dev/node/v3/app/types"
+	utypes "pkg.akt.dev/node/v3/upgrades/types"
 )
 
 const (
-	UpgradeName = "v2.1.0"
+	UpgradeName = "v3.0.0"
 )
 
 type upgrade struct {

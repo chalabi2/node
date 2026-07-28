@@ -1,10 +1,10 @@
-package v2_1_0
+package v3_0_0
 
 import (
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	sdkmodule "github.com/cosmos/cosmos-sdk/types/module"
 
-	utypes "pkg.akt.dev/node/v2/upgrades/types"
+	utypes "pkg.akt.dev/node/v3/upgrades/types"
 )
 
 type marketMigrations struct {

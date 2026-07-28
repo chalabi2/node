@@ -1,13 +1,13 @@
-// Package v2_1_0
+// Package v3_0_0
 // nolint revive
-package v2_1_0
+package v3_0_0
 
 import (
 	dv1 "pkg.akt.dev/go/node/deployment/v1"
 	mv1 "pkg.akt.dev/go/node/market/v1"
 	otypes "pkg.akt.dev/go/node/oracle/v2"
 
-	utypes "pkg.akt.dev/node/v2/upgrades/types"
+	utypes "pkg.akt.dev/node/v3/upgrades/types"
 )
 
 func init() {

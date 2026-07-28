@@ -15,7 +15,7 @@ import (
 	attr "pkg.akt.dev/go/node/types/attributes/v1"
 	vtypes "pkg.akt.dev/go/node/verification/v1"
 
-	verificationtypes "pkg.akt.dev/node/v2/x/verification/types"
+	verificationtypes "pkg.akt.dev/node/v3/x/verification/types"
 )
 
 func TestBidFilterRequiresLegacyAndVerificationMatches(t *testing.T) {

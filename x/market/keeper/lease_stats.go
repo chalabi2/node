@@ -9,7 +9,7 @@ import (
 
 	mv1 "pkg.akt.dev/go/node/market/v1"
 
-	"pkg.akt.dev/node/v2/x/market/keeper/keys"
+	"pkg.akt.dev/node/v3/x/market/keeper/keys"
 )
 
 const providerLeaseStatsBackfillBucket int64 = 0
