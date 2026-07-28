@@ -1,0 +1,274 @@
+package keeper
+
+import (
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/require"
+
+	sdk "github.com/cosmos/cosmos-sdk/types"
+
+	vtypes "pkg.akt.dev/go/node/verification/v1"
+	"pkg.akt.dev/go/testutil"
+
+	moduletypes "pkg.akt.dev/node/v2/x/verification/types"
+)
+
+func TestEndBlockerExpiresAttestation(t *testing.T) {
+	bank := &recordingBank{}
+	ctx, k := setupStoreKeeperWithOptions(t, WithBankKeeper(bank), WithDistributionKeeper(bank))
+	provider := testutil.AccAddress(t)
+	auditor := testutil.AccAddress(t)
+	record := attestationRecord(provider, auditor)
+	record.ExpiresAt = ctx.BlockTime().Add(-time.Second)
+	params := k.GetParams(ctx)
+
+	require.NoError(t, k.SetAttestation(ctx, record))
+	require.NoError(t, k.SetAuditEscrow(ctx, consumedAuditEscrowRecord(
+		ctx,
+		provider,
+		auditor,
+		record.AuditEscrowID,
+		record.Tier,
+		record.Fee,
+		params,
+	)))
+	require.NoError(t, k.EndBlocker(ctx))
+
+	got, found := k.GetAttestation(ctx, provider, auditor)
+	require.True(t, found)
+	require.Equal(t, vtypes.AttestationStatusExpired, got.Status)
+	require.Equal(t, vtypes.FeeStatusReleasedToAuditor, got.FeeStatus)
+	require.Equal(t, vtypes.DepositStatusReturnedToAuditor, got.DepositStatus)
+	require.Equal(t, vtypes.FaultAttributionNoFault, got.FaultAttribution)
+
+	escrow, found := k.GetAuditEscrow(ctx, record.AuditEscrowID)
+	require.True(t, found)
+	require.Equal(t, vtypes.AuditEscrowStatusSettled, escrow.Status)
+	require.Equal(t, vtypes.FeeStatusReleasedToAuditor, escrow.FeeStatus)
+	require.Equal(t, vtypes.ProviderDepositStatusReturnedToProvider, escrow.ProviderDepositStatus)
+	require.Equal(t, vtypes.AuditEscrowSettlementReasonNoFault, escrow.SettlementReason)
+	require.Equal(t, vtypes.FaultAttributionNoFault, escrow.FaultAttribution)
+
+	testutil.EnsureEvent(t, ctx.EventManager().Events().ToABCIEvents(), &vtypes.EventAttestationExpired{
+		Provider: provider.String(),
+		Auditor:  auditor.String(),
+		Tier:     record.Tier,
+	})
+
+	var byAuditor []vtypes.AttestationRecord
+	k.WithAuditorAttestations(ctx, auditor, func(record vtypes.AttestationRecord) bool {
+		byAuditor = append(byAuditor, record)
+		return false
+	})
+	require.Empty(t, byAuditor)
+	require.Equal(t, []bankTransfer{
+		{to: auditor, module: moduletypes.ModuleName, amt: sdk.NewCoins(record.Fee)},
+		{to: auditor, module: moduletypes.ModuleName, amt: sdk.NewCoins(record.Deposit)},
+		{to: provider, module: moduletypes.ModuleName, amt: sdk.NewCoins(params.ProviderAuditDeposit)},
+	}, bank.moduleToAccount)
+}
+
+func TestEndBlockerIgnoresStaleAttestationExpiryQueue(t *testing.T) {
+	bank := &recordingBank{}
+	ctx, k := setupStoreKeeperWithOptions(t, WithBankKeeper(bank), WithDistributionKeeper(bank))
+	provider := testutil.AccAddress(t)
+	auditor := testutil.AccAddress(t)
+	record := attestationRecord(provider, auditor)
+	record.ExpiresAt = ctx.BlockTime().Add(-time.Second)
+	require.NoError(t, k.SetAttestation(ctx, record))
+
+	record.ExpiresAt = ctx.BlockTime().Add(time.Hour)
+	require.NoError(t, k.SetAttestation(ctx, record))
+	require.NoError(t, k.EndBlocker(ctx))
+
+	got, found := k.GetAttestation(ctx, provider, auditor)
+	require.True(t, found)
+	require.Equal(t, vtypes.AttestationStatusValid, got.Status)
+	require.Equal(t, record.ExpiresAt, got.ExpiresAt)
+	require.Empty(t, bank.moduleToAccount)
+}
+
+func TestEndBlockerLapsesAuditorAtRenewalDeadline(t *testing.T) {
+	bank := &recordingBank{}
+	ctx, k := setupStoreKeeperWithOptions(t, WithBankKeeper(bank))
+	auditor := testutil.AccAddress(t)
+	record := auditorRecord(auditor)
+	record.RenewalDeadline = ctx.BlockTime().Add(-time.Second)
+	params := k.GetParams(ctx)
+
+	require.NoError(t, k.SetAuditor(ctx, record))
+	require.NoError(t, k.EndBlocker(ctx))
+
+	got, found := k.GetAuditor(ctx, auditor)
+	require.True(t, found)
+	require.Equal(t, vtypes.AuditorStatusLapsed, got.Status)
+	require.Equal(t, record.RenewalDeadline, got.RenewalDeadline)
+	require.Equal(t, vtypes.BondStatusUnbonding, got.BondStatus)
+	require.NotNil(t, got.BondUnbondingCompletionTime)
+	require.Equal(t, ctx.BlockTime().Add(params.AuditorUnbondingPeriod), *got.BondUnbondingCompletionTime)
+	testutil.EnsureEvent(t, ctx.EventManager().Events().ToABCIEvents(), &vtypes.EventAuditorLapsed{
+		Auditor: auditor.String(),
+	})
+
+	ctx = ctx.WithBlockTime(*got.BondUnbondingCompletionTime)
+	require.NoError(t, k.EndBlocker(ctx))
+	require.Equal(t, []bankTransfer{
+		{to: auditor, module: moduletypes.ModuleName, amt: sdk.NewCoins(record.BondAmount)},
+	}, bank.moduleToAccount)
+}
+
+func TestEndBlockerDefersFrozenAuditorUnbondingUntilResolution(t *testing.T) {
+	ctx, k := setupStoreKeeper(t)
+	auditor := testutil.AccAddress(t)
+	record := auditorRecord(auditor)
+	record.Status = vtypes.AuditorStatusFrozen
+	record.BondStatus = vtypes.BondStatusFrozen
+	record.RenewalDeadline = ctx.BlockTime().Add(-time.Second)
+	require.NoError(t, k.SetAuditor(ctx, record))
+
+	discrepancy := discrepancyRecord(testutil.AccAddress(t), auditor, testutil.AccAddress(t))
+	k.SetDiscrepancy(ctx, discrepancy)
+
+	require.NoError(t, k.EndBlocker(ctx))
+
+	got, found := k.GetAuditor(ctx, auditor)
+	require.True(t, found)
+	require.Equal(t, vtypes.AuditorStatusLapsed, got.Status)
+	require.Equal(t, vtypes.BondStatusFrozen, got.BondStatus)
+	require.Nil(t, got.BondUnbondingCompletionTime)
+
+	require.NoError(t, k.(*keeper).resolveDiscrepancyAuditorBond(ctx, auditor, discrepancy.ID, false))
+
+	got, found = k.GetAuditor(ctx, auditor)
+	require.True(t, found)
+	require.Equal(t, vtypes.AuditorStatusLapsed, got.Status)
+	require.Equal(t, vtypes.BondStatusUnbonding, got.BondStatus)
+	require.NotNil(t, got.BondUnbondingCompletionTime)
+	require.Equal(t, ctx.BlockTime().Add(k.GetParams(ctx).AuditorUnbondingPeriod), *got.BondUnbondingCompletionTime)
+}
+
+func TestEndBlockerCompletesAuditorBondUnbonding(t *testing.T) {
+	bank := &recordingBank{}
+	ctx, k := setupStoreKeeperWithOptions(t, WithBankKeeper(bank), WithDistributionKeeper(bank))
+	auditor := testutil.AccAddress(t)
+	record := auditorRecord(auditor)
+	record.Status = vtypes.AuditorStatusResigned
+	record.RenewalDeadline = time.Time{}
+	record.BondStatus = vtypes.BondStatusUnbonding
+	completion := ctx.BlockTime().Add(-time.Second)
+	record.BondUnbondingCompletionTime = &completion
+
+	require.NoError(t, k.SetAuditor(ctx, record))
+	require.NoError(t, k.EndBlocker(ctx))
+
+	got, found := k.GetAuditor(ctx, auditor)
+	require.True(t, found)
+	require.True(t, got.BondAmount.IsZero())
+	require.Equal(t, vtypes.BondStatusNotBonded, got.BondStatus)
+	require.Nil(t, got.BondUnbondingCompletionTime)
+	require.Equal(t, []bankTransfer{
+		{to: auditor, module: moduletypes.ModuleName, amt: sdk.NewCoins(record.BondAmount)},
+	}, bank.moduleToAccount)
+}
+
+func TestEndBlockerSuspendsSnapshotCompliance(t *testing.T) {
+	ctx, k := setupStoreKeeper(t)
+	provider := testutil.AccAddress(t)
+	record := providerSnapshotRecord(provider)
+	record.ComplianceDeadline = ctx.BlockTime().Add(-time.Second)
+
+	require.NoError(t, k.SetProviderSnapshot(ctx, record))
+	require.NoError(t, k.EndBlocker(ctx))
+
+	got, found := k.GetProviderSnapshot(ctx, provider)
+	require.True(t, found)
+	require.True(t, got.Suspended)
+	testutil.EnsureEvent(t, ctx.EventManager().Events().ToABCIEvents(), &vtypes.EventSnapshotSuspended{
+		Provider: provider.String(),
+	})
+}
+
+func TestEndBlockerExpiresAuditEscrowAndHonorsCap(t *testing.T) {
+	bank := &recordingBank{}
+	ctx, k := setupStoreKeeperWithOptions(t, WithBankKeeper(bank), WithDistributionKeeper(bank))
+	params := k.GetParams(ctx)
+	params.MaxEndblockerAuditEscrowExpiries = 1
+	k.SetParams(ctx, params)
+
+	provider1 := testutil.AccAddress(t)
+	provider2 := testutil.AccAddress(t)
+	escrow1 := openAuditEscrowRecord(ctx, provider1, 1, params)
+	escrow2 := openAuditEscrowRecord(ctx, provider2, 2, params)
+	escrow1.ExpiresAt = ctx.BlockTime().Add(-time.Second)
+	escrow2.ExpiresAt = escrow1.ExpiresAt
+
+	require.NoError(t, k.SetAuditEscrow(ctx, escrow2))
+	require.NoError(t, k.SetAuditEscrow(ctx, escrow1))
+	require.NoError(t, k.EndBlocker(ctx))
+
+	got1, found := k.GetAuditEscrow(ctx, 1)
+	require.True(t, found)
+	require.Equal(t, vtypes.AuditEscrowStatusExpired, got1.Status)
+	require.Equal(t, vtypes.FeeStatusReturnedToProvider, got1.FeeStatus)
+	require.Equal(t, vtypes.ProviderDepositStatusReturnedToProvider, got1.ProviderDepositStatus)
+	require.Equal(t, vtypes.AuditEscrowSettlementReasonExpiredUnconsumed, got1.SettlementReason)
+	require.Equal(t, vtypes.FaultAttributionNoFault, got1.FaultAttribution)
+	testutil.EnsureEvent(t, ctx.EventManager().Events().ToABCIEvents(), &vtypes.EventAuditEscrowSettled{
+		AuditEscrowID:    1,
+		Reason:           vtypes.AuditEscrowSettlementReasonExpiredUnconsumed,
+		FaultAttribution: vtypes.FaultAttributionNoFault,
+	})
+
+	got2, found := k.GetAuditEscrow(ctx, 2)
+	require.True(t, found)
+	require.Equal(t, vtypes.AuditEscrowStatusOpen, got2.Status)
+	require.Equal(t, []bankTransfer{
+		{to: provider1, module: moduletypes.ModuleName, amt: sdk.NewCoins(params.MinFeeL1)},
+		{to: provider1, module: moduletypes.ModuleName, amt: sdk.NewCoins(params.ProviderAuditDeposit)},
+	}, bank.moduleToAccount)
+
+	require.NoError(t, k.EndBlocker(ctx))
+	got2, found = k.GetAuditEscrow(ctx, 2)
+	require.True(t, found)
+	require.Equal(t, vtypes.AuditEscrowStatusExpired, got2.Status)
+}
+
+func TestEndBlockerDoesNotExpireConsumedAuditEscrow(t *testing.T) {
+	bank := &recordingBank{}
+	ctx, k := setupStoreKeeperWithOptions(t, WithBankKeeper(bank), WithDistributionKeeper(bank))
+	provider := testutil.AccAddress(t)
+	auditor := testutil.AccAddress(t)
+	escrow := auditEscrowRecord(provider, auditor)
+	escrow.ExpiresAt = ctx.BlockTime().Add(-time.Second)
+	consumedAt := ctx.BlockTime().Add(-2 * time.Second)
+	escrow.ConsumedAt = &consumedAt
+
+	require.NoError(t, k.SetAuditEscrow(ctx, escrow))
+	require.NoError(t, k.EndBlocker(ctx))
+
+	got, found := k.GetAuditEscrow(ctx, escrow.ID)
+	require.True(t, found)
+	require.Equal(t, vtypes.AuditEscrowStatusOpen, got.Status)
+	require.Equal(t, auditor.String(), got.ConsumedByAuditor)
+	require.Equal(t, consumedAt, *got.ConsumedAt)
+	require.Empty(t, bank.moduleToAccount)
+}
+
+func TestEndBlockerExpiresVerificationGrace(t *testing.T) {
+	ctx, k := setupStoreKeeper(t)
+	provider := testutil.AccAddress(t)
+	record := graceRecord(provider)
+	record.ExpiresAt = ctx.BlockTime().Add(-time.Second)
+
+	require.NoError(t, k.SetProviderVerificationGrace(ctx, record))
+	require.NoError(t, k.EndBlocker(ctx))
+
+	got, found := k.GetProviderVerificationGrace(ctx, provider)
+	require.True(t, found)
+	require.Equal(t, vtypes.VerificationGraceStatusExpired, got.Status)
+	testutil.EnsureEvent(t, ctx.EventManager().Events().ToABCIEvents(), &vtypes.EventVerificationGraceEnded{
+		GraceRecordID: record.ID,
+		Status:        vtypes.VerificationGraceStatusExpired,
+	})
+}
