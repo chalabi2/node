@@ -1867,6 +1867,54 @@ func TestPostSnapshotHashRejectsMalformedHash(t *testing.T) {
 	require.ErrorIs(t, err, moduletypes.ErrInvalidReason)
 }
 
+func TestPostSnapshotHashRejectsResourceIncreaseAboveBond(t *testing.T) {
+	ctx, k := setupStoreKeeper(t)
+	provider := testutil.AccAddress(t)
+	auditor := testutil.AccAddress(t)
+	previous := providerSnapshotRecord(provider)
+	require.NoError(t, k.SetProviderSnapshot(ctx, previous))
+	require.NoError(t, k.SetAttestation(ctx, attestationRecord(provider, auditor)))
+	require.NoError(t, k.SetProviderBond(ctx, providerBondRecord(provider)))
+
+	resources := previous.ResourceSummary
+	resources.TotalStorageMB = 200 * 1048576
+	err := k.PostSnapshotHash(ctx, provider, testHash(), resources, ctx.BlockTime())
+	require.ErrorIs(t, err, moduletypes.ErrInsufficientProviderBond)
+
+	got, found := k.GetProviderSnapshot(ctx, provider)
+	require.True(t, found)
+	require.Equal(t, previous, got)
+}
+
+func TestPostSnapshotHashResumesSuspendedProvider(t *testing.T) {
+	ctx, k := setupStoreKeeper(t)
+	provider := testutil.AccAddress(t)
+	previous := providerSnapshotRecord(provider)
+	previous.Suspended = true
+	require.NoError(t, k.SetProviderSnapshot(ctx, previous))
+
+	require.NoError(t, k.PostSnapshotHash(ctx, provider, testHash(), previous.ResourceSummary, ctx.BlockTime()))
+
+	got, found := k.GetProviderSnapshot(ctx, provider)
+	require.True(t, found)
+	require.False(t, got.Suspended)
+	testutil.EnsureEvent(t, ctx.EventManager().Events().ToABCIEvents(), &vtypes.EventSnapshotResumed{
+		Provider: provider.String(),
+	})
+}
+
+func TestProviderPrerequisitesRejectSnapshotAtDeadline(t *testing.T) {
+	ctx, k := setupStoreKeeper(t)
+	provider := testutil.AccAddress(t)
+	snapshot := providerSnapshotRecord(provider)
+	snapshot.ComplianceDeadline = ctx.BlockTime()
+	require.NoError(t, k.SetProviderSnapshot(ctx, snapshot))
+	require.NoError(t, k.SetProviderBond(ctx, providerBondRecord(provider)))
+
+	err := k.(*keeper).validateProviderPrerequisites(ctx, provider, vtypes.TierVerified)
+	require.ErrorIs(t, err, moduletypes.ErrProviderSnapshotSuspended)
+}
+
 func TestOpenAuditEscrowRejectsInvalidCapabilities(t *testing.T) {
 	ctx, k := setupStoreKeeper(t)
 	params := k.GetParams(ctx)

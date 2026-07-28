@@ -106,7 +106,7 @@ func TestSnapshotComplianceInvariant(t *testing.T) {
 	snapshot.Suspended = true
 	require.NoError(t, k.SetProviderSnapshot(ctx, snapshot))
 	_, broken = SnapshotComplianceInvariant(k)(ctx)
-	require.True(t, broken)
+	require.False(t, broken)
 }
 
 func TestDiscrepancyConsistencyInvariant(t *testing.T) {
@@ -191,6 +191,23 @@ func TestGraceRecordInvariant(t *testing.T) {
 
 	_, broken = GraceRecordInvariant(k)(ctx)
 	require.False(t, broken)
+
+	discrepancy.ResolutionStatus = vtypes.DiscrepancyStatusResolved
+	discrepancy.ResolutionReason = vtypes.DiscrepancyResolutionReasonEvidenceInconclusive
+	discrepancy.FaultAttribution = vtypes.FaultAttributionNoFault
+	discrepancy.ResolutionEvidenceHash = testHash()
+	discrepancy.ResolutionProposalID = 1
+	k.SetDiscrepancy(ctx, discrepancy)
+
+	_, broken = GraceRecordInvariant(k)(ctx)
+	require.False(t, broken)
+
+	discrepancy.ResolutionReason = vtypes.DiscrepancyResolutionReasonProviderFault
+	discrepancy.FaultAttribution = vtypes.FaultAttributionProviderFault
+	k.SetDiscrepancy(ctx, discrepancy)
+
+	_, broken = GraceRecordInvariant(k)(ctx)
+	require.True(t, broken)
 }
 
 func TestRegisterInvariants(t *testing.T) {

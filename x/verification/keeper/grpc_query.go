@@ -48,16 +48,18 @@ func (k Querier) Auditors(c context.Context, req *vtypes.QueryAuditorsRequest) (
 	store := prefix.NewStore(ctx.KVStore(k.Keeper.StoreKey()), singletonKey(prefixAuditor))
 
 	var records []vtypes.AuditorRecord
-	pageRes, err := sdkquery.Paginate(store, req.Pagination, func(_ []byte, value []byte) error {
+	pageRes, err := sdkquery.FilteredPaginate(store, req.Pagination, func(_ []byte, value []byte, accumulate bool) (bool, error) {
 		var record vtypes.AuditorRecord
 		if err := k.Keeper.Codec().Unmarshal(value, &record); err != nil {
-			return err
+			return false, err
 		}
 		if req.StatusFilter != vtypes.AuditorStatusUnspecified && record.Status != req.StatusFilter {
-			return nil
+			return false, nil
 		}
-		records = append(records, record)
-		return nil
+		if accumulate {
+			records = append(records, record)
+		}
+		return true, nil
 	})
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
@@ -98,16 +100,18 @@ func (k Querier) ProviderAttestations(c context.Context, req *vtypes.QueryProvid
 	store := prefix.NewStore(ctx.KVStore(k.Keeper.StoreKey()), addressKey(prefixAttestation, provider))
 
 	var records []vtypes.AttestationRecord
-	pageRes, err := sdkquery.Paginate(store, req.Pagination, func(_ []byte, value []byte) error {
+	pageRes, err := sdkquery.FilteredPaginate(store, req.Pagination, func(_ []byte, value []byte, accumulate bool) (bool, error) {
 		var record vtypes.AttestationRecord
 		if err := k.Keeper.Codec().Unmarshal(value, &record); err != nil {
-			return err
+			return false, err
 		}
 		if req.StatusFilter != vtypes.AttestationStatusUnspecified && record.Status != req.StatusFilter {
-			return nil
+			return false, nil
 		}
-		records = append(records, record)
-		return nil
+		if accumulate {
+			records = append(records, record)
+		}
+		return true, nil
 	})
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
@@ -166,16 +170,18 @@ func (k Querier) Discrepancies(c context.Context, req *vtypes.QueryDiscrepancies
 	store := prefix.NewStore(ctx.KVStore(k.Keeper.StoreKey()), singletonKey(prefixDiscrepancy))
 
 	var records []vtypes.DiscrepancyEvent
-	pageRes, err := sdkquery.Paginate(store, req.Pagination, func(_ []byte, value []byte) error {
+	pageRes, err := sdkquery.FilteredPaginate(store, req.Pagination, func(_ []byte, value []byte, accumulate bool) (bool, error) {
 		var record vtypes.DiscrepancyEvent
 		if err := k.Keeper.Codec().Unmarshal(value, &record); err != nil {
-			return err
+			return false, err
 		}
 		if req.StatusFilter != vtypes.DiscrepancyStatusUnspecified && record.ResolutionStatus != req.StatusFilter {
-			return nil
+			return false, nil
 		}
-		records = append(records, record)
-		return nil
+		if accumulate {
+			records = append(records, record)
+		}
+		return true, nil
 	})
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
@@ -211,16 +217,18 @@ func (k Querier) ProviderAuditEscrows(c context.Context, req *vtypes.QueryProvid
 	store := prefix.NewStore(ctx.KVStore(k.Keeper.StoreKey()), providerAuditEscrowPrefix(provider))
 
 	var records []vtypes.AuditEscrowRecord
-	pageRes, err := sdkquery.Paginate(store, req.Pagination, func(key []byte, _ []byte) error {
+	pageRes, err := sdkquery.FilteredPaginate(store, req.Pagination, func(key []byte, _ []byte, accumulate bool) (bool, error) {
 		record, found := k.Keeper.GetAuditEscrow(ctx, readID(key))
 		if !found {
-			return nil
+			return false, nil
 		}
 		if req.StatusFilter != vtypes.AuditEscrowStatusUnspecified && record.Status != req.StatusFilter {
-			return nil
+			return false, nil
 		}
-		records = append(records, record)
-		return nil
+		if accumulate {
+			records = append(records, record)
+		}
+		return true, nil
 	})
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())

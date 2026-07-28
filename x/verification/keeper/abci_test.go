@@ -61,7 +61,7 @@ func TestEndBlockerExpiresAttestation(t *testing.T) {
 		byAuditor = append(byAuditor, record)
 		return false
 	})
-	require.Empty(t, byAuditor)
+	require.Equal(t, []vtypes.AttestationRecord{got}, byAuditor)
 	require.Equal(t, []bankTransfer{
 		{to: auditor, module: moduletypes.ModuleName, amt: sdk.NewCoins(record.Fee)},
 		{to: auditor, module: moduletypes.ModuleName, amt: sdk.NewCoins(record.Deposit)},
@@ -196,6 +196,10 @@ func TestEndBlockerCapsProviderBondUnbondingEntries(t *testing.T) {
 	require.Equal(t, []bankTransfer{
 		{to: provider, module: moduletypes.ModuleName, amt: sdk.NewCoins(first)},
 	}, bank.moduleToAccount)
+	testutil.EnsureEvent(t, ctx.EventManager().Events().ToABCIEvents(), &vtypes.EventProviderBondWithdrawalCompleted{
+		Provider: provider.String(),
+		Amount:   first,
+	})
 
 	require.NoError(t, k.EndBlocker(ctx))
 	bond, found = k.GetProviderBond(ctx, provider)
@@ -205,6 +209,27 @@ func TestEndBlockerCapsProviderBondUnbondingEntries(t *testing.T) {
 		{to: provider, module: moduletypes.ModuleName, amt: sdk.NewCoins(first)},
 		{to: provider, module: moduletypes.ModuleName, amt: sdk.NewCoins(second)},
 	}, bank.moduleToAccount)
+}
+
+func TestEndBlockerUsesOriginalDiscrepancyTimeoutAfterParamUpdate(t *testing.T) {
+	bank := &recordingBank{}
+	ctx, k := setupStoreKeeperWithOptions(t, WithBankKeeper(bank), WithDistributionKeeper(bank))
+	provider := testutil.AccAddress(t)
+	auditorA := testutil.AccAddress(t)
+	auditorB := testutil.AccAddress(t)
+	params := k.GetParams(ctx)
+
+	setupPendingDiscrepancy(t, ctx, k, provider, auditorA, auditorB)
+	originalTimeout := ctx.BlockTime().Add(params.DiscrepancyResolutionTimeout)
+	params.DiscrepancyResolutionTimeout *= 2
+	k.SetParams(ctx, params)
+
+	ctx = ctx.WithBlockTime(originalTimeout)
+	require.NoError(t, k.EndBlocker(ctx))
+
+	discrepancy, found := k.GetDiscrepancy(ctx, 1)
+	require.True(t, found)
+	require.Equal(t, vtypes.DiscrepancyStatusTimedOut, discrepancy.ResolutionStatus)
 }
 
 func TestEndBlockerSuspendsSnapshotCompliance(t *testing.T) {

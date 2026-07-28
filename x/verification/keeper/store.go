@@ -107,11 +107,10 @@ func (k *keeper) SetAttestation(ctx sdk.Context, record vtypes.AttestationRecord
 
 	store := ctx.KVStore(k.skey)
 	store.Set(attestationKey(provider, auditor), k.cdc.MustMarshal(&record))
+	store.Set(auditorAttestationKey(auditor, provider), []byte{})
 	if record.Status == vtypes.AttestationStatusValid {
-		store.Set(auditorAttestationKey(auditor, provider), []byte{})
 		store.Set(attestationExpiryQueueKey(record.ExpiresAt, provider, auditor), []byte{})
 	} else {
-		store.Delete(auditorAttestationKey(auditor, provider))
 		store.Delete(attestationExpiryQueueKey(record.ExpiresAt, provider, auditor))
 	}
 	return nil
@@ -405,9 +404,12 @@ func (k *keeper) GetProviderVerificationGrace(ctx sdk.Context, provider sdk.AccA
 	var result vtypes.ProviderVerificationGraceRecord
 	var found bool
 	k.WithProviderVerificationGraces(ctx, provider, func(record vtypes.ProviderVerificationGraceRecord) bool {
-		result = record
-		found = true
-		return true
+		if !found || record.StartedAt.After(result.StartedAt) ||
+			(record.StartedAt.Equal(result.StartedAt) && record.ID > result.ID) {
+			result = record
+			found = true
+		}
+		return false
 	})
 	return result, found
 }

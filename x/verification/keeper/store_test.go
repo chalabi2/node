@@ -1,6 +1,7 @@
 package keeper
 
 import (
+	"math"
 	"testing"
 	"time"
 
@@ -76,6 +77,38 @@ func TestRequiredProviderBondUsesSpecUnitConversions(t *testing.T) {
 
 	got := RequiredProviderBond(DefaultParams(), vtypes.TierVerified, resources)
 	require.Equal(t, sdk.NewInt64Coin(bondDenom, 104500000), got)
+}
+
+func TestRequiredProviderBondHandlesMaximumResourceSummary(t *testing.T) {
+	require.NotPanics(t, func() {
+		got := RequiredProviderBond(DefaultParams(), vtypes.TierTrusted, vtypes.ResourceSummary{
+			TotalGPUs:      math.MaxUint32,
+			TotalVCPUs:     math.MaxUint32,
+			TotalMemoryMB:  math.MaxUint64,
+			TotalStorageMB: math.MaxUint64,
+		})
+		require.True(t, got.IsValid())
+		require.True(t, got.IsPositive())
+	})
+}
+
+func TestGetProviderVerificationGraceReturnsLatestRecord(t *testing.T) {
+	ctx, k := setupStoreKeeper(t)
+	provider := testutil.AccAddress(t)
+
+	first := graceRecord(provider)
+	first.ID = 1
+	first.StartedAt = ctx.BlockTime()
+	require.NoError(t, k.SetProviderVerificationGrace(ctx, first))
+
+	second := graceRecord(provider)
+	second.ID = 2
+	second.StartedAt = ctx.BlockTime().Add(time.Second)
+	require.NoError(t, k.SetProviderVerificationGrace(ctx, second))
+
+	got, found := k.GetProviderVerificationGrace(ctx, provider)
+	require.True(t, found)
+	require.Equal(t, second.ID, got.ID)
 }
 
 func setupStoreKeeper(t testing.TB) (sdk.Context, Keeper) {

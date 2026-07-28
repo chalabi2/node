@@ -27,10 +27,10 @@ func sumResourceBond(resources vtypes.ResourceSummary, gpu, vcpu, memGB, storage
 	amount := math.ZeroInt()
 	denom := gpu.Denom
 
-	amount = amount.Add(gpu.Amount.MulRaw(int64(resources.TotalGPUs)))
-	amount = amount.Add(vcpu.Amount.MulRaw(int64(resources.TotalVCPUs)))
-	amount = amount.Add(memGB.Amount.MulRaw(int64(resources.TotalMemoryMB)).QuoRaw(1024))
-	amount = amount.Add(storageTB.Amount.MulRaw(int64(resources.TotalStorageMB)).QuoRaw(1048576))
+	amount = amount.Add(gpu.Amount.Mul(math.NewIntFromUint64(uint64(resources.TotalGPUs))))
+	amount = amount.Add(vcpu.Amount.Mul(math.NewIntFromUint64(uint64(resources.TotalVCPUs))))
+	amount = amount.Add(memGB.Amount.Mul(math.NewIntFromUint64(resources.TotalMemoryMB)).QuoRaw(1024))
+	amount = amount.Add(storageTB.Amount.Mul(math.NewIntFromUint64(resources.TotalStorageMB)).QuoRaw(1048576))
 
 	return sdk.NewCoin(denom, amount)
 }

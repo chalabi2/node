@@ -186,12 +186,18 @@ func (k *keeper) processProviderBondUnbondingQueue(ctx sdk.Context, blockTime ti
 		}
 
 		record.UnbondingEntries = append(record.UnbondingEntries[:entryIndex], record.UnbondingEntries[entryIndex+1:]...)
-		return k.SetProviderBond(ctx, record)
+		if err = k.SetProviderBond(ctx, record); err != nil {
+			return err
+		}
+		return ctx.EventManager().EmitTypedEvent(&vtypes.EventProviderBondWithdrawalCompleted{
+			Provider: provider.String(),
+			Amount:   completed,
+		})
 	})
 }
 
 func (k *keeper) processDiscrepancyTimeoutQueue(ctx sdk.Context, blockTime time.Time, limit uint32) error {
-	return k.processDueQueue(ctx, prefixQueueDiscrepancyTimeout, blockTime, limit, func(key []byte, timeout time.Time) error {
+	return k.processDueQueue(ctx, prefixQueueDiscrepancyTimeout, blockTime, limit, func(key []byte, _ time.Time) error {
 		id, err := decodeIDQueueKey(key)
 		if err != nil {
 			return err
@@ -201,11 +207,6 @@ func (k *keeper) processDiscrepancyTimeoutQueue(ctx sdk.Context, blockTime time.
 		if !found || discrepancy.ResolutionStatus != vtypes.DiscrepancyStatusPending {
 			return nil
 		}
-		expectedTimeout := discrepancy.Timestamp.Add(k.GetParams(ctx).DiscrepancyResolutionTimeout)
-		if !expectedTimeout.Equal(timeout) {
-			return nil
-		}
-
 		result := SettlementResult{
 			FeeStatus:             vtypes.FeeStatusReturnedToProvider,
 			DepositStatus:         vtypes.DepositStatusSlashed,

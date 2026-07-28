@@ -163,14 +163,11 @@ func SnapshotComplianceInvariant(k Keeper) sdk.Invariant {
 				broken = err.Error()
 				return true
 			}
-			k.WithProviderAttestations(ctx, provider, vtypes.AttestationStatusValid, func(attestation vtypes.AttestationRecord) bool {
-				if vtypes.TierRequiresSnapshot(attestation.Tier) {
-					broken = fmt.Sprintf("snapshot-noncompliant provider %s has valid %s attestation", snapshot.Provider, attestation.Tier)
-					return true
-				}
-				return false
-			})
-			return broken != ""
+			if k.IsProviderSnapshotCompliant(ctx, provider) {
+				broken = fmt.Sprintf("suspended provider %s is reported snapshot-compliant", snapshot.Provider)
+				return true
+			}
+			return false
 		})
 		if broken != "" {
 			return sdk.FormatInvariant(moduletypes.ModuleName, invariantSnapshotCompliance, broken), true
@@ -316,19 +313,29 @@ func GraceRecordInvariant(k Keeper) sdk.Invariant {
 			}
 			for _, id := range record.SourceDiscrepancyIDs {
 				discrepancy, found := k.GetDiscrepancy(ctx, id)
-				if found &&
-					(discrepancy.ResolutionStatus == vtypes.DiscrepancyStatusPending ||
-						discrepancy.ResolutionStatus == vtypes.DiscrepancyStatusTimedOut) {
+				if found && discrepancySupportsActiveGrace(discrepancy) {
 					return false
 				}
 			}
-			broken = fmt.Sprintf("active grace record %d has no pending or timed-out source discrepancy", record.ID)
+			broken = fmt.Sprintf("active grace record %d has no qualifying source discrepancy", record.ID)
 			return true
 		})
 		if broken != "" {
 			return sdk.FormatInvariant(moduletypes.ModuleName, invariantGraceRecord, broken), true
 		}
 		return "", false
+	}
+}
+
+func discrepancySupportsActiveGrace(record vtypes.DiscrepancyEvent) bool {
+	switch record.ResolutionStatus {
+	case vtypes.DiscrepancyStatusPending, vtypes.DiscrepancyStatusTimedOut:
+		return true
+	case vtypes.DiscrepancyStatusResolved:
+		return record.FaultAttribution != vtypes.FaultAttributionProviderFault &&
+			record.FaultAttribution != vtypes.FaultAttributionSharedFault
+	default:
+		return false
 	}
 }
 

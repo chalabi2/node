@@ -405,7 +405,11 @@ func (k *keeper) PostSnapshotHash(ctx sdk.Context, provider sdk.AccAddress, snap
 	if ctx.BlockTime().Sub(snapshotTimestamp) > params.MaxSnapshotAge {
 		return moduletypes.ErrSnapshotTooOld
 	}
+	if err := k.validateSnapshotBondCoverage(ctx, provider, resources); err != nil {
+		return err
+	}
 
+	previous, hadPrevious := k.GetProviderSnapshot(ctx, provider)
 	record := vtypes.ProviderSnapshotRecord{
 		Provider:           provider.String(),
 		SnapshotHash:       snapshotHash,
@@ -417,6 +421,13 @@ func (k *keeper) PostSnapshotHash(ctx sdk.Context, provider sdk.AccAddress, snap
 	}
 	if err := k.SetProviderSnapshot(ctx, record); err != nil {
 		return err
+	}
+	if hadPrevious && previous.Suspended {
+		if err := ctx.EventManager().EmitTypedEvent(&vtypes.EventSnapshotResumed{
+			Provider: record.Provider,
+		}); err != nil {
+			return err
+		}
 	}
 	return ctx.EventManager().EmitTypedEvent(&vtypes.EventSnapshotHashPosted{
 		Provider:           record.Provider,
@@ -1363,7 +1374,8 @@ func (k *keeper) ResolveDiscrepancy(
 	}
 
 	var endedGrace *vtypes.ProviderVerificationGraceRecord
-	if discrepancy.GraceRecordID != 0 && fault == vtypes.FaultAttributionProviderFault {
+	if discrepancy.GraceRecordID != 0 &&
+		(fault == vtypes.FaultAttributionProviderFault || fault == vtypes.FaultAttributionSharedFault) {
 		if grace, found := k.getProviderVerificationGraceByID(ctx, discrepancy.GraceRecordID); found && grace.Status == vtypes.VerificationGraceStatusActive {
 			grace.Status = vtypes.VerificationGraceStatusTerminated
 			if err = k.SetProviderVerificationGrace(ctx, grace); err != nil {
@@ -1412,7 +1424,7 @@ func (k *keeper) validateProviderPrerequisites(ctx sdk.Context, provider sdk.Acc
 	if !found {
 		return moduletypes.ErrSnapshotNonCompliant
 	}
-	if snapshot.Suspended || snapshot.ComplianceDeadline.Before(ctx.BlockTime()) {
+	if snapshot.Suspended || !snapshot.ComplianceDeadline.After(ctx.BlockTime()) {
 		return moduletypes.ErrProviderSnapshotSuspended
 	}
 
@@ -1436,6 +1448,30 @@ func (k *keeper) validateProviderPrerequisites(ctx sdk.Context, provider sdk.Acc
 	}
 
 	return nil
+}
+
+func (k *keeper) validateSnapshotBondCoverage(ctx sdk.Context, provider sdk.AccAddress, resources vtypes.ResourceSummary) error {
+	params := k.GetParams(ctx)
+	required := sdk.NewCoin(params.BondL1.Denom, math.ZeroInt())
+	k.WithProviderAttestations(ctx, provider, vtypes.AttestationStatusValid, func(attestation vtypes.AttestationRecord) bool {
+		if !vtypes.TierRequiresProviderBond(attestation.Tier) {
+			return false
+		}
+		candidate := RequiredProviderBond(params, attestation.Tier, resources)
+		if candidate.Amount.GT(required.Amount) {
+			required = candidate
+		}
+		return false
+	})
+	if required.IsZero() {
+		return nil
+	}
+
+	bond, found := k.GetProviderBond(ctx, provider)
+	if !found {
+		return moduletypes.ErrInsufficientProviderBond
+	}
+	return requireCoinAtLeast(bond.BondedAmount, required, moduletypes.ErrInsufficientProviderBond)
 }
 
 func (k *keeper) validateProviderLeaseCompletion(ctx sdk.Context, provider sdk.AccAddress, tier vtypes.VerificationTier, params vtypes.Params) error {

@@ -2,6 +2,7 @@ package keeper
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -111,6 +112,110 @@ func TestGRPCQueryMissingRecords(t *testing.T) {
 
 	_, err = client.ProviderSnapshot(ctx, &vtypes.QueryProviderSnapshotRequest{Provider: testutil.AccAddress(t).String()})
 	require.Error(t, err)
+}
+
+func TestGRPCFilteredQueriesPaginateMatchingRecords(t *testing.T) {
+	ctx, k := setupStoreKeeper(t)
+	provider := testutil.AccAddress(t)
+	auditorA := testutil.AccAddress(t)
+	auditorB := testutil.AccAddress(t)
+	auditorC := testutil.AccAddress(t)
+
+	activeA := auditorRecord(auditorA)
+	activeB := auditorRecord(auditorB)
+	lapsed := auditorRecord(auditorC)
+	lapsed.Status = vtypes.AuditorStatusLapsed
+	lapsed.RenewalDeadline = time.Time{}
+	require.NoError(t, k.SetAuditor(ctx, activeA))
+	require.NoError(t, k.SetAuditor(ctx, lapsed))
+	require.NoError(t, k.SetAuditor(ctx, activeB))
+
+	validA := attestationRecord(provider, auditorA)
+	validB := attestationRecord(provider, auditorB)
+	expired := attestationRecord(provider, auditorC)
+	expired.Status = vtypes.AttestationStatusExpired
+	require.NoError(t, k.SetAttestation(ctx, validA))
+	require.NoError(t, k.SetAttestation(ctx, expired))
+	require.NoError(t, k.SetAttestation(ctx, validB))
+
+	pendingA := discrepancyRecord(provider, auditorA, auditorB)
+	pendingA.ID = 1
+	pendingB := discrepancyRecord(provider, auditorB, auditorC)
+	pendingB.ID = 3
+	resolved := discrepancyRecord(provider, auditorA, auditorC)
+	resolved.ID = 2
+	resolved.ResolutionStatus = vtypes.DiscrepancyStatusResolved
+	k.SetDiscrepancy(ctx, pendingA)
+	k.SetDiscrepancy(ctx, resolved)
+	k.SetDiscrepancy(ctx, pendingB)
+
+	openA := auditEscrowRecord(provider, auditorA)
+	openA.ID = 1
+	openB := auditEscrowRecord(provider, auditorB)
+	openB.ID = 3
+	settled := auditEscrowRecord(provider, auditorC)
+	settled.ID = 2
+	settled.Status = vtypes.AuditEscrowStatusSettled
+	require.NoError(t, k.SetAuditEscrow(ctx, openA))
+	require.NoError(t, k.SetAuditEscrow(ctx, settled))
+	require.NoError(t, k.SetAuditEscrow(ctx, openB))
+
+	client := queryClient(t, ctx, k)
+	page := &sdkquery.PageRequest{Limit: 1, CountTotal: true}
+
+	auditors, err := client.Auditors(ctx, &vtypes.QueryAuditorsRequest{
+		StatusFilter: vtypes.AuditorStatusActive,
+		Pagination:   page,
+	})
+	require.NoError(t, err)
+	require.Len(t, auditors.Auditors, 1)
+	require.Equal(t, uint64(2), auditors.Pagination.Total)
+	require.NotEmpty(t, auditors.Pagination.NextKey)
+
+	attestations, err := client.ProviderAttestations(ctx, &vtypes.QueryProviderAttestationsRequest{
+		Provider:     provider.String(),
+		StatusFilter: vtypes.AttestationStatusValid,
+		Pagination:   page,
+	})
+	require.NoError(t, err)
+	require.Len(t, attestations.Attestations, 1)
+	require.Equal(t, uint64(2), attestations.Pagination.Total)
+	require.NotEmpty(t, attestations.Pagination.NextKey)
+
+	discrepancies, err := client.Discrepancies(ctx, &vtypes.QueryDiscrepanciesRequest{
+		StatusFilter: vtypes.DiscrepancyStatusPending,
+		Pagination:   page,
+	})
+	require.NoError(t, err)
+	require.Len(t, discrepancies.Discrepancies, 1)
+	require.Equal(t, uint64(2), discrepancies.Pagination.Total)
+	require.NotEmpty(t, discrepancies.Pagination.NextKey)
+
+	escrows, err := client.ProviderAuditEscrows(ctx, &vtypes.QueryProviderAuditEscrowsRequest{
+		Provider:     provider.String(),
+		StatusFilter: vtypes.AuditEscrowStatusOpen,
+		Pagination:   page,
+	})
+	require.NoError(t, err)
+	require.Len(t, escrows.Escrows, 1)
+	require.Equal(t, uint64(2), escrows.Pagination.Total)
+	require.NotEmpty(t, escrows.Pagination.NextKey)
+}
+
+func TestGRPCAuditorAttestationsIncludesTerminalRecords(t *testing.T) {
+	ctx, k := setupStoreKeeper(t)
+	provider := testutil.AccAddress(t)
+	auditor := testutil.AccAddress(t)
+	record := attestationRecord(provider, auditor)
+	record.Status = vtypes.AttestationStatusExpired
+	require.NoError(t, k.SetAttestation(ctx, record))
+
+	client := queryClient(t, ctx, k)
+	response, err := client.AuditorAttestations(ctx, &vtypes.QueryAuditorAttestationsRequest{
+		Auditor: auditor.String(),
+	})
+	require.NoError(t, err)
+	require.Equal(t, []vtypes.AttestationRecord{record}, response.Attestations)
 }
 
 func queryClient(t testing.TB, ctx sdk.Context, k Keeper) vtypes.QueryClient {

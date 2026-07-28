@@ -366,13 +366,12 @@ func ValidateGenesis(data *vtypes.GenesisState) error {
 			if !exists || discrepancy.Provider != record.Provider {
 				return errorsmod.Wrap(moduletypes.ErrInvalidReason, "verification: grace record references an invalid discrepancy")
 			}
-			if discrepancy.ResolutionStatus == vtypes.DiscrepancyStatusPending ||
-				discrepancy.ResolutionStatus == vtypes.DiscrepancyStatusTimedOut {
+			if genesisDiscrepancySupportsActiveGrace(discrepancy) {
 				activeSource = true
 			}
 		}
 		if record.Status == vtypes.VerificationGraceStatusActive && !activeSource {
-			return errorsmod.Wrap(moduletypes.ErrInvalidReason, "verification: active grace has no pending or timed-out source")
+			return errorsmod.Wrap(moduletypes.ErrInvalidReason, "verification: active grace has no qualifying source")
 		}
 		seenGraces[record.ID] = record
 		if record.ID > maxGraceID {
@@ -842,6 +841,18 @@ func containsID(ids []uint64, target uint64) bool {
 		}
 	}
 	return false
+}
+
+func genesisDiscrepancySupportsActiveGrace(record vtypes.DiscrepancyEvent) bool {
+	switch record.ResolutionStatus {
+	case vtypes.DiscrepancyStatusPending, vtypes.DiscrepancyStatusTimedOut:
+		return true
+	case vtypes.DiscrepancyStatusResolved:
+		return record.FaultAttribution != vtypes.FaultAttributionProviderFault &&
+			record.FaultAttribution != vtypes.FaultAttributionSharedFault
+	default:
+		return false
+	}
 }
 
 func validateNextGenesisID(name string, nextID, maxID uint64) error {
