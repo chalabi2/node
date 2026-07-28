@@ -7,18 +7,9 @@ import (
 	"fmt"
 
 	"cosmossdk.io/log"
-	sdkmath "cosmossdk.io/math"
 	storetypes "cosmossdk.io/store/types"
 	upgradetypes "cosmossdk.io/x/upgrade/types"
-	wasmkeeper "github.com/CosmWasm/wasmd/x/wasm/keeper"
-	wasmtypes "github.com/CosmWasm/wasmd/x/wasm/types"
-	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/cosmos/cosmos-sdk/types/module"
-	distrtypes "github.com/cosmos/cosmos-sdk/x/distribution/types"
-	etypes "pkg.akt.dev/go/node/escrow/module"
-	mvbeta "pkg.akt.dev/go/node/market/v1beta5"
-	otypes "pkg.akt.dev/go/node/oracle/v2"
-	"pkg.akt.dev/go/sdkutil"
 
 	apptypes "pkg.akt.dev/node/v3/app/types"
 	utypes "pkg.akt.dev/node/v3/upgrades/types"
@@ -53,88 +44,7 @@ func (up *upgrade) StoreLoader() *storetypes.StoreUpgrades {
 }
 
 func (up *upgrade) UpgradeHandler() upgradetypes.UpgradeHandler {
-	return func(ctx context.Context, plan upgradetypes.Plan, fromVM module.VersionMap) (module.VersionMap, error) {
-		sctx := sdk.UnwrapSDKContext(ctx)
-
-		toVM, err := up.MM.RunMigrations(ctx, up.Configurator, fromVM)
-		if err != nil {
-			return toVM, err
-		}
-
-		msgServer := wasmkeeper.NewMsgServerImpl(up.Keepers.Cosmos.Wasm)
-		govAddr := up.Keepers.Cosmos.Wasm.GetAuthority()
-
-		contractAddr := "akash1nc5tatafv6eyq7llkr2gv50ff9e22mnf70qgjlv737ktmt4eswrqyagled"
-
-		_, err = msgServer.StoreAndMigrateContract(ctx, &wasmtypes.MsgStoreAndMigrateContract{
-			Authority:             govAddr,
-			WASMByteCode:          pythContract,
-			Contract:              contractAddr,
-			InstantiatePermission: &wasmtypes.AllowNobody,
-			Msg:                   []byte("{}"),
-		})
-		if err != nil {
-			return toVM, err
-		}
-
-		oparams := otypes.DefaultParams()
-		oparams.MinPriceSources = 1
-		// Set the pyth contract as an authorized oracle price source
-		oparams.Sources = []string{contractAddr}
-		err = up.Keepers.Akash.Oracle.SetParams(sctx, oparams)
-		if err != nil {
-			return toVM, err
-		}
-
-		if sctx.ChainID() == "akashnet-2" {
-			feePool, err := up.Keepers.Cosmos.Distr.FeePool.Get(ctx)
-			if err != nil {
-				return toVM, fmt.Errorf("failed to get fee pool: %w", err)
-			}
-
-			// deposit 427,414,453uAKT to escrow as stated in the upgrade proposal
-			escrowDepositAmount := sdk.NewCoin(sdkutil.DenomUakt, sdkmath.NewInt(427414453))
-
-			err = up.Keepers.Cosmos.Bank.SendCoinsFromModuleToModule(ctx, distrtypes.ModuleName, etypes.ModuleName, sdk.Coins{escrowDepositAmount})
-			if err != nil {
-				return toVM, fmt.Errorf("failed to transfer funds to escrow: %w", err)
-			}
-
-			feePool.CommunityPool = feePool.CommunityPool.Sub(sdk.DecCoins{sdk.NewDecCoinFromCoin(escrowDepositAmount)})
-
-			err = up.Keepers.Cosmos.Distr.FeePool.Set(ctx, feePool)
-			if err != nil {
-				return toVM, fmt.Errorf("failed to set updated fee pool balance: %w", err)
-			}
-		}
-
-		bparams, err := up.Keepers.Akash.Bme.GetParams(sctx)
-		if err != nil {
-			return toVM, fmt.Errorf("failed to get bme params: %w", err)
-		}
-
-		if bparams.MaxPendingAttempts == 0 {
-			bparams.MaxPendingAttempts = 3
-			err = up.Keepers.Akash.Bme.SetParams(sctx, bparams)
-			if err != nil {
-				return toVM, fmt.Errorf("failed to set bme params: %w", err)
-			}
-		}
-
-		// Set default reclamation params for market module
-		mparams, err := up.Keepers.Akash.Market.GetParams(sctx)
-		if err != nil {
-			return toVM, fmt.Errorf("failed to get market params: %w", err)
-		}
-
-		if mparams.MinReclamationWindow == 0 {
-			mparams.MinReclamationWindow = mvbeta.DefaultMinReclamationWindow
-			mparams.MaxReclamationWindow = mvbeta.DefaultMaxReclamationWindow
-			if err = up.Keepers.Akash.Market.SetParams(sctx, mparams); err != nil {
-				return toVM, fmt.Errorf("failed to set market params: %w", err)
-			}
-		}
-
-		return toVM, err
+	return func(ctx context.Context, _ upgradetypes.Plan, fromVM module.VersionMap) (module.VersionMap, error) {
+		return up.MM.RunMigrations(ctx, up.Configurator, fromVM)
 	}
 }
