@@ -50,9 +50,6 @@ Add new upgrades after this line based on the template above
         - `verification`
 
 - Migrations
-    - oracle     `1 -> 2`
-    - deployment `7 -> 8`
-    - market     `8 -> 9`
     - market     `9 -> 10`
     - provider   `3 -> 4`
 
