@@ -20,6 +20,8 @@ import (
 	testutilmod "github.com/cosmos/cosmos-sdk/types/module/testutil"
 	authtypes "github.com/cosmos/cosmos-sdk/x/auth/types"
 
+	mv1 "pkg.akt.dev/go/node/market/v1"
+	ptypes "pkg.akt.dev/go/node/provider/v1beta4"
 	vtypes "pkg.akt.dev/go/node/verification/v1"
 	"pkg.akt.dev/go/testutil"
 
@@ -330,7 +332,16 @@ func setupGenesisKeeper(t testing.TB, opts ...keeper.Option) (sdk.Context, keepe
 	require.NoError(t, err)
 
 	ctx := sdk.NewContext(ms, tmproto.Header{Time: genesisNow()}, false, testutil.Logger(t))
-	return ctx, keeper.NewKeeper(cfg.Codec, key, opts...)
+	bank := &genesisBank{}
+	dependencies := keeper.Dependencies{
+		Authority:    "gov",
+		Account:      &recordingAccountKeeper{},
+		Bank:         bank,
+		Distribution: bank,
+		Provider:     genesisProviderKeeper{},
+		Market:       genesisMarketKeeper{},
+	}
+	return ctx, keeper.NewKeeper(cfg.Codec, key, dependencies, opts...)
 }
 
 type recordingAccountKeeper struct {
@@ -502,4 +513,24 @@ func (b *genesisBank) SendCoinsFromModuleToAccount(_ context.Context, _ string, 
 		amount:  amount[0],
 	})
 	return nil
+}
+
+func (*genesisBank) FundCommunityPool(context.Context, sdk.Coins, sdk.AccAddress) error {
+	return nil
+}
+
+type genesisProviderKeeper struct{}
+
+func (genesisProviderKeeper) Get(_ sdk.Context, id sdk.Address) (ptypes.Provider, bool) {
+	return ptypes.Provider{Owner: id.String()}, true
+}
+
+func (genesisProviderKeeper) GetRegistrationTime(ctx sdk.Context, _ sdk.Address) (time.Time, bool) {
+	return ctx.BlockTime(), true
+}
+
+type genesisMarketKeeper struct{}
+
+func (genesisMarketKeeper) GetProviderLeaseStats(sdk.Context, sdk.Address) (uint64, map[mv1.LeaseClosedReason]uint64, bool) {
+	return 0, nil, true
 }

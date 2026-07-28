@@ -1,6 +1,7 @@
 package keeper_test
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -15,6 +16,8 @@ import (
 	govtypes "github.com/cosmos/cosmos-sdk/x/gov/types"
 	"github.com/stretchr/testify/require"
 
+	mv1 "pkg.akt.dev/go/node/market/v1"
+	ptypes "pkg.akt.dev/go/node/provider/v1beta4"
 	vtypes "pkg.akt.dev/go/node/verification/v1"
 	"pkg.akt.dev/go/testutil"
 
@@ -122,7 +125,65 @@ func setupUpdateParamsMsgServer(t testing.TB) (sdk.Context, verificationkeeper.K
 		false,
 		testutil.Logger(t),
 	)
-	k := verificationkeeper.NewKeeper(cfg.Codec, key, verificationkeeper.WithAuthority(updateParamsAuthority))
+	k := verificationkeeper.NewKeeper(cfg.Codec, key, updateParamsDependencies())
 
 	return ctx, k, verificationhandler.NewMsgServerImpl(k)
+}
+
+func updateParamsDependencies() verificationkeeper.Dependencies {
+	bank := updateParamsBank{}
+	return verificationkeeper.Dependencies{
+		Authority:    updateParamsAuthority,
+		Account:      &updateParamsAccountKeeper{},
+		Bank:         bank,
+		Distribution: bank,
+		Provider:     updateParamsProviderKeeper{},
+		Market:       updateParamsMarketKeeper{},
+	}
+}
+
+type updateParamsAccountKeeper struct {
+	account sdk.ModuleAccountI
+}
+
+func (k *updateParamsAccountKeeper) GetModuleAccount(context.Context, string) sdk.ModuleAccountI {
+	return k.account
+}
+
+func (k *updateParamsAccountKeeper) SetModuleAccount(_ context.Context, account sdk.ModuleAccountI) {
+	k.account = account
+}
+
+type updateParamsBank struct{}
+
+func (updateParamsBank) GetBalance(_ context.Context, _ sdk.AccAddress, denom string) sdk.Coin {
+	return sdk.NewInt64Coin(denom, 0)
+}
+
+func (updateParamsBank) SendCoinsFromAccountToModule(context.Context, sdk.AccAddress, string, sdk.Coins) error {
+	return nil
+}
+
+func (updateParamsBank) SendCoinsFromModuleToAccount(context.Context, string, sdk.AccAddress, sdk.Coins) error {
+	return nil
+}
+
+func (updateParamsBank) FundCommunityPool(context.Context, sdk.Coins, sdk.AccAddress) error {
+	return nil
+}
+
+type updateParamsProviderKeeper struct{}
+
+func (updateParamsProviderKeeper) Get(_ sdk.Context, id sdk.Address) (ptypes.Provider, bool) {
+	return ptypes.Provider{Owner: id.String()}, true
+}
+
+func (updateParamsProviderKeeper) GetRegistrationTime(ctx sdk.Context, _ sdk.Address) (time.Time, bool) {
+	return ctx.BlockTime(), true
+}
+
+type updateParamsMarketKeeper struct{}
+
+func (updateParamsMarketKeeper) GetProviderLeaseStats(sdk.Context, sdk.Address) (uint64, map[mv1.LeaseClosedReason]uint64, bool) {
+	return 0, nil, true
 }

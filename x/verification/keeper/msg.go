@@ -17,7 +17,7 @@ import (
 )
 
 func (k *keeper) RegisterAuditor(ctx sdk.Context, authority string, auditor sdk.AccAddress, tier vtypes.VerificationTier, metadataHash []byte) error {
-	if k.authority != "" && authority != k.authority {
+	if authority != k.authority {
 		return errorsmod.Wrapf(moduletypes.ErrAuditorUnauthorizedTier, "invalid authority %s", authority)
 	}
 	if err := validateMsgTier(tier); err != nil {
@@ -118,7 +118,7 @@ func (k *keeper) PostAuditorBond(ctx sdk.Context, auditor sdk.AccAddress, amount
 }
 
 func (k *keeper) RenewAuditor(ctx sdk.Context, authority string, auditor sdk.AccAddress) error {
-	if k.authority != "" && authority != k.authority {
+	if authority != k.authority {
 		return errorsmod.Wrapf(moduletypes.ErrAuditorUnauthorizedTier, "invalid authority %s", authority)
 	}
 
@@ -146,7 +146,7 @@ func (k *keeper) RenewAuditor(ctx sdk.Context, authority string, auditor sdk.Acc
 }
 
 func (k *keeper) RemoveAuditor(ctx sdk.Context, authority string, auditor sdk.AccAddress) error {
-	if k.authority != "" && authority != k.authority {
+	if authority != k.authority {
 		return errorsmod.Wrapf(moduletypes.ErrAuditorUnauthorizedTier, "invalid authority %s", authority)
 	}
 
@@ -337,7 +337,7 @@ func (k *keeper) SlashProviderBond(
 	reason vtypes.ProviderBondSlashReason,
 	evidenceHash []byte,
 ) error {
-	if k.authority != "" && authority != k.authority {
+	if authority != k.authority {
 		return govtypes.ErrInvalidSigner.Wrapf("invalid authority; expected %s, got %s", k.authority, authority)
 	}
 	if err := validateHash(evidenceHash, "evidence hash"); err != nil {
@@ -577,7 +577,7 @@ func (k *keeper) SettleAuditEscrow(
 	fault vtypes.FaultAttribution,
 	evidenceHash []byte,
 ) error {
-	if k.authority != "" && authority != k.authority {
+	if authority != k.authority {
 		return errorsmod.Wrapf(moduletypes.ErrUnauthorizedAuditEscrowSettlement, "invalid authority %s", authority)
 	}
 	if err := validateHash(evidenceHash, "evidence hash"); err != nil {
@@ -1003,7 +1003,7 @@ func (k *keeper) RevokeAuditorAttestations(
 }
 
 func (k *keeper) validateGovernanceAttestationRevocation(authority string, evidenceHash []byte) error {
-	if k.authority != "" && authority != k.authority {
+	if authority != k.authority {
 		return govtypes.ErrInvalidSigner.Wrapf("invalid authority; expected %s, got %s", k.authority, authority)
 	}
 	return validateHash(evidenceHash, "evidence hash")
@@ -1327,7 +1327,7 @@ func (k *keeper) ResolveDiscrepancy(
 	fault vtypes.FaultAttribution,
 	evidenceHash []byte,
 ) error {
-	if k.authority != "" && authority != k.authority {
+	if authority != k.authority {
 		return govtypes.ErrInvalidSigner.Wrapf("invalid authority; expected %s, got %s", k.authority, authority)
 	}
 	if err := validateHash(evidenceHash, "evidence hash"); err != nil {
@@ -1475,18 +1475,19 @@ func (k *keeper) validateSnapshotBondCoverage(ctx sdk.Context, provider sdk.AccA
 }
 
 func (k *keeper) validateProviderLeaseCompletion(ctx sdk.Context, provider sdk.AccAddress, tier vtypes.VerificationTier, params vtypes.Params) error {
-	if k.market == nil || !vtypes.TierAtLeast(tier, vtypes.TierEstablished) {
+	if !vtypes.TierAtLeast(tier, vtypes.TierEstablished) {
 		return nil
 	}
 
 	completed, failuresByReason, found := k.market.GetProviderLeaseStats(ctx, provider)
-	var failed uint64
+	completedCount := math.NewIntFromUint64(completed)
+	failedCount := math.ZeroInt()
 	for _, count := range failuresByReason {
-		failed += count
+		failedCount = failedCount.Add(math.NewIntFromUint64(count))
 	}
 
-	total := completed + failed
-	if !found || total < uint64(params.MinLeasesForCompletionRate) {
+	total := completedCount.Add(failedCount)
+	if !found || total.LT(math.NewIntFromUint64(uint64(params.MinLeasesForCompletionRate))) {
 		return nil
 	}
 
@@ -1494,8 +1495,14 @@ func (k *keeper) validateProviderLeaseCompletion(ctx sdk.Context, provider sdk.A
 	if vtypes.TierAtLeast(tier, vtypes.TierTrusted) {
 		minBps = params.MinLeaseCompletionBpsL4
 	}
-	if completed*10000 < total*uint64(minBps) {
-		return errorsmod.Wrapf(moduletypes.ErrInsufficientLeaseCompletionRate, "completed %d failed %d below %d bps", completed, failed, minBps)
+	if completedCount.MulRaw(10000).LT(total.MulRaw(int64(minBps))) {
+		return errorsmod.Wrapf(
+			moduletypes.ErrInsufficientLeaseCompletionRate,
+			"completed %d failed %s below %d bps",
+			completed,
+			failedCount,
+			minBps,
+		)
 	}
 
 	return nil
@@ -1570,10 +1577,6 @@ func (k *keeper) hasContinuousL3History(ctx sdk.Context, provider sdk.AccAddress
 }
 
 func (k *keeper) validateProviderAge(ctx sdk.Context, provider sdk.AccAddress, tier vtypes.VerificationTier, params vtypes.Params) error {
-	if k.provider == nil {
-		return nil
-	}
-
 	registeredAt, found := k.provider.GetRegistrationTime(ctx, provider)
 	if !found || registeredAt.IsZero() {
 		return errorsmod.Wrap(moduletypes.ErrInsufficientProviderAge, "provider registration time not found")
@@ -1591,22 +1594,19 @@ func (k *keeper) validateProviderAge(ctx sdk.Context, provider sdk.AccAddress, t
 }
 
 func (k *keeper) providerExists(ctx sdk.Context, provider sdk.AccAddress) bool {
-	if k.provider == nil {
-		return true
-	}
 	_, found := k.provider.Get(ctx, provider)
 	return found
 }
 
 func (k *keeper) sendAccountToModule(ctx sdk.Context, addr sdk.AccAddress, coin sdk.Coin) error {
-	if k.bank == nil || coin.IsZero() {
+	if coin.IsZero() {
 		return nil
 	}
 	return k.bank.SendCoinsFromAccountToModule(ctx, addr, moduletypes.ModuleName, sdk.NewCoins(coin))
 }
 
 func (k *keeper) sendModuleToAccount(ctx sdk.Context, addr sdk.AccAddress, coin sdk.Coin) error {
-	if k.bank == nil || coin.IsZero() {
+	if coin.IsZero() {
 		return nil
 	}
 	return k.bank.SendCoinsFromModuleToAccount(ctx, moduletypes.ModuleName, addr, sdk.NewCoins(coin))
@@ -1615,9 +1615,6 @@ func (k *keeper) sendModuleToAccount(ctx sdk.Context, addr sdk.AccAddress, coin 
 func (k *keeper) fundCommunityPool(ctx sdk.Context, coin sdk.Coin) error {
 	if coin.IsZero() {
 		return nil
-	}
-	if k.distribution == nil {
-		return errorsmod.Wrap(moduletypes.ErrInvalidReason, "distribution keeper is not configured")
 	}
 	return k.distribution.FundCommunityPool(ctx, sdk.NewCoins(coin), authtypes.NewModuleAddress(moduletypes.ModuleName))
 }

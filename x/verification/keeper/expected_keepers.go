@@ -34,6 +34,15 @@ type MarketStatsKeeper interface {
 	GetProviderLeaseStats(ctx sdk.Context, provider sdk.Address) (uint64, map[mv1.LeaseClosedReason]uint64, bool)
 }
 
+type Dependencies struct {
+	Authority    string
+	Account      AccountKeeper
+	Bank         BankKeeper
+	Distribution DistributionKeeper
+	Provider     ProviderKeeper
+	Market       MarketStatsKeeper
+}
+
 type Option func(*keeper)
 
 func WithAuthority(authority string) Option {

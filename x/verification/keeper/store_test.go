@@ -1,6 +1,7 @@
 package keeper
 
 import (
+	"context"
 	"math"
 	"testing"
 	"time"
@@ -16,6 +17,8 @@ import (
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	testutilmod "github.com/cosmos/cosmos-sdk/types/module/testutil"
 
+	mv1 "pkg.akt.dev/go/node/market/v1"
+	ptypes "pkg.akt.dev/go/node/provider/v1beta4"
 	vtypes "pkg.akt.dev/go/node/verification/v1"
 	"pkg.akt.dev/go/testutil"
 
@@ -129,8 +132,54 @@ func setupStoreKeeperWithOptions(t testing.TB, opts ...Option) (sdk.Context, Kee
 	require.NoError(t, err)
 
 	ctx := sdk.NewContext(ms, tmproto.Header{Time: now()}, false, testutil.Logger(t))
-	return ctx, NewKeeper(cfg.Codec, key, opts...)
+	return ctx, NewKeeper(cfg.Codec, key, defaultTestDependencies(), opts...)
 }
+
+func defaultTestDependencies() Dependencies {
+	bank := &recordingBank{}
+	return Dependencies{
+		Authority:    "gov",
+		Account:      &testAccountKeeper{},
+		Bank:         bank,
+		Distribution: bank,
+		Provider:     testProviderKeeper{},
+		Market:       testMarketStatsKeeper{},
+	}
+}
+
+type testAccountKeeper struct {
+	account sdk.ModuleAccountI
+}
+
+func (k *testAccountKeeper) GetModuleAccount(context.Context, string) sdk.ModuleAccountI {
+	return k.account
+}
+
+func (k *testAccountKeeper) SetModuleAccount(_ context.Context, account sdk.ModuleAccountI) {
+	k.account = account
+}
+
+type testProviderKeeper struct{}
+
+func (testProviderKeeper) Get(_ sdk.Context, id sdk.Address) (ptypes.Provider, bool) {
+	return ptypes.Provider{Owner: id.String()}, true
+}
+
+func (testProviderKeeper) GetRegistrationTime(ctx sdk.Context, _ sdk.Address) (time.Time, bool) {
+	return ctx.BlockTime().Add(-100 * 365 * 24 * time.Hour), true
+}
+
+type testMarketStatsKeeper struct{}
+
+func (testMarketStatsKeeper) GetProviderLeaseStats(sdk.Context, sdk.Address) (uint64, map[mv1.LeaseClosedReason]uint64, bool) {
+	return 10000, nil, true
+}
+
+var _ AccountKeeper = (*testAccountKeeper)(nil)
+var _ BankKeeper = (*recordingBank)(nil)
+var _ DistributionKeeper = (*recordingBank)(nil)
+var _ ProviderKeeper = testProviderKeeper{}
+var _ MarketStatsKeeper = testMarketStatsKeeper{}
 
 func auditorRecord(auditor sdk.AccAddress) vtypes.AuditorRecord {
 	return vtypes.AuditorRecord{

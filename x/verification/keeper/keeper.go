@@ -100,15 +100,39 @@ type keeper struct {
 	market       MarketStatsKeeper
 }
 
-func NewKeeper(cdc codec.BinaryCodec, skey storetypes.StoreKey, opts ...Option) Keeper {
+func NewKeeper(cdc codec.BinaryCodec, skey storetypes.StoreKey, dependencies Dependencies, opts ...Option) Keeper {
 	k := &keeper{
-		cdc:  cdc,
-		skey: skey,
+		cdc:          cdc,
+		skey:         skey,
+		authority:    dependencies.Authority,
+		account:      dependencies.Account,
+		bank:         dependencies.Bank,
+		distribution: dependencies.Distribution,
+		provider:     dependencies.Provider,
+		market:       dependencies.Market,
 	}
 	for _, opt := range opts {
 		opt(k)
 	}
+	k.assertDependencies()
 	return k
+}
+
+func (k *keeper) assertDependencies() {
+	switch {
+	case k.authority == "":
+		panic("verification: authority is required")
+	case k.account == nil:
+		panic("verification: account keeper is required")
+	case k.bank == nil:
+		panic("verification: bank keeper is required")
+	case k.distribution == nil:
+		panic("verification: distribution keeper is required")
+	case k.provider == nil:
+		panic("verification: provider keeper is required")
+	case k.market == nil:
+		panic("verification: market stats keeper is required")
+	}
 }
 
 func (k *keeper) Codec() codec.BinaryCodec {
@@ -128,9 +152,6 @@ func (k *keeper) NewQuerier() vtypes.QueryServer {
 }
 
 func (k *keeper) ModuleBalance(ctx sdk.Context, denom string) sdk.Coin {
-	if k.bank == nil {
-		return sdk.NewCoin(denom, math.ZeroInt())
-	}
 	return k.bank.GetBalance(ctx, authtypes.NewModuleAddress(moduletypes.ModuleName), denom)
 }
 
@@ -139,10 +160,6 @@ func (k *keeper) GetAuthority() string {
 }
 
 func (k *keeper) InitializeModuleAccount(ctx context.Context) {
-	if k.account == nil {
-		return
-	}
-
 	account := k.account.GetModuleAccount(ctx, moduletypes.ModuleName)
 	if account == nil {
 		account = authtypes.NewEmptyModuleAccount(moduletypes.ModuleName)
