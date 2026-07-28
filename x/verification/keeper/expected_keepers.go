@@ -31,7 +31,7 @@ type ProviderKeeper interface {
 }
 
 type MarketStatsKeeper interface {
-	GetProviderLeaseStats(ctx sdk.Context, provider sdk.Address) (uint64, map[mv1.LeaseClosedReason]uint64, bool)
+	GetProviderLeaseStats(ctx sdk.Context, provider sdk.Address, since time.Time) (uint64, map[mv1.LeaseClosedReason]uint64, bool)
 }
 
 type Dependencies struct {

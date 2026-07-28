@@ -171,7 +171,7 @@ func (testProviderKeeper) GetRegistrationTime(ctx sdk.Context, _ sdk.Address) (t
 
 type testMarketStatsKeeper struct{}
 
-func (testMarketStatsKeeper) GetProviderLeaseStats(sdk.Context, sdk.Address) (uint64, map[mv1.LeaseClosedReason]uint64, bool) {
+func (testMarketStatsKeeper) GetProviderLeaseStats(sdk.Context, sdk.Address, time.Time) (uint64, map[mv1.LeaseClosedReason]uint64, bool) {
 	return 10000, nil, true
 }
 

@@ -531,6 +531,6 @@ func (genesisProviderKeeper) GetRegistrationTime(ctx sdk.Context, _ sdk.Address)
 
 type genesisMarketKeeper struct{}
 
-func (genesisMarketKeeper) GetProviderLeaseStats(sdk.Context, sdk.Address) (uint64, map[mv1.LeaseClosedReason]uint64, bool) {
+func (genesisMarketKeeper) GetProviderLeaseStats(sdk.Context, sdk.Address, time.Time) (uint64, map[mv1.LeaseClosedReason]uint64, bool) {
 	return 0, nil, true
 }

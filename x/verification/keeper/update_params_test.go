@@ -184,6 +184,6 @@ func (updateParamsProviderKeeper) GetRegistrationTime(ctx sdk.Context, _ sdk.Add
 
 type updateParamsMarketKeeper struct{}
 
-func (updateParamsMarketKeeper) GetProviderLeaseStats(sdk.Context, sdk.Address) (uint64, map[mv1.LeaseClosedReason]uint64, bool) {
+func (updateParamsMarketKeeper) GetProviderLeaseStats(sdk.Context, sdk.Address, time.Time) (uint64, map[mv1.LeaseClosedReason]uint64, bool) {
 	return 0, nil, true
 }

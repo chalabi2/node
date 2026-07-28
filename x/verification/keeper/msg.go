@@ -1497,7 +1497,8 @@ func (k *keeper) validateProviderLeaseCompletion(ctx sdk.Context, provider sdk.A
 		return nil
 	}
 
-	completed, failuresByReason, found := k.market.GetProviderLeaseStats(ctx, provider)
+	since := ctx.BlockTime().Add(-cleanHistoryWindowForTier(params, tier))
+	completed, failuresByReason, found := k.market.GetProviderLeaseStats(ctx, provider, since)
 	completedCount := math.NewIntFromUint64(completed)
 	failedCount := math.ZeroInt()
 	for _, count := range failuresByReason {
