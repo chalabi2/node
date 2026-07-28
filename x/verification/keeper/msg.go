@@ -494,6 +494,12 @@ func (k *keeper) OpenAuditEscrow(
 	if err := k.SetAuditEscrow(ctx, record); err != nil {
 		return 0, err
 	}
+	if err := ctx.EventManager().EmitTypedEvent(&vtypes.EventFeeEscrowed{
+		Provider: provider.String(),
+		Amount:   fee,
+	}); err != nil {
+		return 0, err
+	}
 	if err := ctx.EventManager().EmitTypedEvent(&vtypes.EventAuditEscrowOpened{
 		AuditEscrowID:   id,
 		Provider:        provider.String(),
@@ -1159,6 +1165,18 @@ func (k *keeper) setAttestationWithDiscrepancyCheck(ctx sdk.Context, attestation
 			ResolutionStatus: vtypes.DiscrepancyStatusPending,
 		}
 		k.SetDiscrepancy(ctx, discrepancy)
+		if err = ctx.EventManager().EmitTypedEvent(&vtypes.EventAuditorFrozen{
+			Auditor:       discrepancy.AuditorA,
+			DiscrepancyID: id,
+		}); err != nil {
+			return err
+		}
+		if err = ctx.EventManager().EmitTypedEvent(&vtypes.EventAuditorFrozen{
+			Auditor:       discrepancy.AuditorB,
+			DiscrepancyID: id,
+		}); err != nil {
+			return err
+		}
 		if err = ctx.EventManager().EmitTypedEvent(&vtypes.EventDiscrepancyDetected{
 			DiscrepancyID: id,
 			Provider:      discrepancy.Provider,
@@ -1625,6 +1643,12 @@ func (k *keeper) settleAuditEscrowFunds(ctx sdk.Context, provider sdk.AccAddress
 		if err := k.sendModuleToAccount(ctx, provider, escrow.Fee); err != nil {
 			return err
 		}
+		if err := ctx.EventManager().EmitTypedEvent(&vtypes.EventFeeReturnedToProvider{
+			Provider: provider.String(),
+			Amount:   escrow.Fee,
+		}); err != nil {
+			return err
+		}
 	case vtypes.FeeStatusEscrowed, vtypes.FeeStatusReleasedToAuditor, vtypes.FeeStatusUnspecified:
 		return errorsmod.Wrapf(moduletypes.ErrInvalidReason, "unsupported audit escrow fee settlement %s", result.FeeStatus)
 	}
@@ -1651,8 +1675,20 @@ func (k *keeper) settleAttestationFunds(ctx sdk.Context, provider, auditor sdk.A
 		if err := k.sendModuleToAccount(ctx, auditor, attestation.Fee); err != nil {
 			return err
 		}
+		if err := ctx.EventManager().EmitTypedEvent(&vtypes.EventFeeReleasedToAuditor{
+			Auditor: auditor.String(),
+			Amount:  attestation.Fee,
+		}); err != nil {
+			return err
+		}
 	case vtypes.FeeStatusReturnedToProvider:
 		if err := k.sendModuleToAccount(ctx, provider, attestation.Fee); err != nil {
+			return err
+		}
+		if err := ctx.EventManager().EmitTypedEvent(&vtypes.EventFeeReturnedToProvider{
+			Provider: provider.String(),
+			Amount:   attestation.Fee,
+		}); err != nil {
 			return err
 		}
 	case vtypes.FeeStatusEscrowed, vtypes.FeeStatusUnspecified:
@@ -1661,9 +1697,21 @@ func (k *keeper) settleAttestationFunds(ctx sdk.Context, provider, auditor sdk.A
 
 	switch result.DepositStatus {
 	case vtypes.DepositStatusReturnedToAuditor:
-		return k.sendModuleToAccount(ctx, auditor, attestation.Deposit)
+		if err := k.sendModuleToAccount(ctx, auditor, attestation.Deposit); err != nil {
+			return err
+		}
+		return ctx.EventManager().EmitTypedEvent(&vtypes.EventDepositReturnedToAuditor{
+			Auditor: auditor.String(),
+			Amount:  attestation.Deposit,
+		})
 	case vtypes.DepositStatusSlashed:
-		return k.fundCommunityPool(ctx, attestation.Deposit)
+		if err := k.fundCommunityPool(ctx, attestation.Deposit); err != nil {
+			return err
+		}
+		return ctx.EventManager().EmitTypedEvent(&vtypes.EventDepositSlashed{
+			Auditor: auditor.String(),
+			Amount:  attestation.Deposit,
+		})
 	case vtypes.DepositStatusEscrowed, vtypes.DepositStatusPendingDiscrepancy, vtypes.DepositStatusUnspecified:
 		return errorsmod.Wrapf(moduletypes.ErrInvalidReason, "unsupported attestation deposit settlement %s", result.DepositStatus)
 	}
@@ -1697,8 +1745,20 @@ func (k *keeper) settlePendingDiscrepancyAttestationFunds(ctx sdk.Context, provi
 		if err := k.sendModuleToAccount(ctx, auditor, attestation.Fee); err != nil {
 			return err
 		}
+		if err := ctx.EventManager().EmitTypedEvent(&vtypes.EventFeeReleasedToAuditor{
+			Auditor: auditor.String(),
+			Amount:  attestation.Fee,
+		}); err != nil {
+			return err
+		}
 	case vtypes.FeeStatusReturnedToProvider:
 		if err := k.sendModuleToAccount(ctx, provider, attestation.Fee); err != nil {
+			return err
+		}
+		if err := ctx.EventManager().EmitTypedEvent(&vtypes.EventFeeReturnedToProvider{
+			Provider: provider.String(),
+			Amount:   attestation.Fee,
+		}); err != nil {
 			return err
 		}
 	case vtypes.FeeStatusEscrowed, vtypes.FeeStatusUnspecified:
@@ -1707,9 +1767,21 @@ func (k *keeper) settlePendingDiscrepancyAttestationFunds(ctx sdk.Context, provi
 
 	switch result.DepositStatus {
 	case vtypes.DepositStatusReturnedToAuditor:
-		return k.sendModuleToAccount(ctx, auditor, attestation.Deposit)
+		if err := k.sendModuleToAccount(ctx, auditor, attestation.Deposit); err != nil {
+			return err
+		}
+		return ctx.EventManager().EmitTypedEvent(&vtypes.EventDepositReturnedToAuditor{
+			Auditor: auditor.String(),
+			Amount:  attestation.Deposit,
+		})
 	case vtypes.DepositStatusSlashed:
-		return k.fundCommunityPool(ctx, attestation.Deposit)
+		if err := k.fundCommunityPool(ctx, attestation.Deposit); err != nil {
+			return err
+		}
+		return ctx.EventManager().EmitTypedEvent(&vtypes.EventDepositSlashed{
+			Auditor: auditor.String(),
+			Amount:  attestation.Deposit,
+		})
 	case vtypes.DepositStatusEscrowed, vtypes.DepositStatusPendingDiscrepancy, vtypes.DepositStatusUnspecified:
 		return errorsmod.Wrapf(moduletypes.ErrInvalidReason, "unsupported pending discrepancy deposit settlement %s", result.DepositStatus)
 	}

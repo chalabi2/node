@@ -94,6 +94,14 @@ func TestSubmitAttestationCreatesDiscrepancyAndGrace(t *testing.T) {
 	require.Equal(t, uint64(1), auditorBRecord.DiscrepancyCount)
 
 	events := ctx.EventManager().Events().ToABCIEvents()
+	testutil.EnsureEvent(t, events, &vtypes.EventAuditorFrozen{
+		Auditor:       auditorA.String(),
+		DiscrepancyID: 1,
+	})
+	testutil.EnsureEvent(t, events, &vtypes.EventAuditorFrozen{
+		Auditor:       auditorB.String(),
+		DiscrepancyID: 1,
+	})
 	testutil.EnsureEvent(t, events, &vtypes.EventDiscrepancyDetected{
 		DiscrepancyID: 1,
 		Provider:      provider.String(),
@@ -468,6 +476,18 @@ func TestEndBlockerTimesOutPendingDiscrepancy(t *testing.T) {
 		DiscrepancyID: 1,
 		AuditorA:      auditorA.String(),
 		AuditorB:      auditorB.String(),
+	})
+	testutil.EnsureEvent(t, ctx.EventManager().Events().ToABCIEvents(), &vtypes.EventFeeReturnedToProvider{
+		Provider: provider.String(),
+		Amount:   params.MinFeeL1,
+	})
+	testutil.EnsureEvent(t, ctx.EventManager().Events().ToABCIEvents(), &vtypes.EventDepositSlashed{
+		Auditor: auditorA.String(),
+		Amount:  params.AttestationDeposit,
+	})
+	testutil.EnsureEvent(t, ctx.EventManager().Events().ToABCIEvents(), &vtypes.EventDepositSlashed{
+		Auditor: auditorB.String(),
+		Amount:  params.AttestationDeposit,
 	})
 
 	require.Equal(t, []bankTransfer{

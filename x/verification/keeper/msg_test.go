@@ -96,6 +96,10 @@ func TestHappyPathMessages(t *testing.T) {
 		SnapshotHash:       testHash(),
 		ComplianceDeadline: ctx.BlockTime().Add(params.SnapshotHashInterval),
 	})
+	testutil.EnsureEvent(t, events, &vtypes.EventFeeEscrowed{
+		Provider: provider.String(),
+		Amount:   params.MinFeeL2,
+	})
 	testutil.EnsureEvent(t, events, &vtypes.EventAuditEscrowOpened{
 		AuditEscrowID:   escrowID,
 		Provider:        provider.String(),
@@ -1043,6 +1047,14 @@ func TestRemoveAttestationDisposition(t *testing.T) {
 		AuditEscrowID:    attestation.AuditEscrowID,
 		Reason:           vtypes.AuditEscrowSettlementReasonNoFault,
 		FaultAttribution: vtypes.FaultAttributionNoFault,
+	})
+	testutil.EnsureEvent(t, ctx.EventManager().Events().ToABCIEvents(), &vtypes.EventFeeReleasedToAuditor{
+		Auditor: auditor.String(),
+		Amount:  attestation.Fee,
+	})
+	testutil.EnsureEvent(t, ctx.EventManager().Events().ToABCIEvents(), &vtypes.EventDepositReturnedToAuditor{
+		Auditor: auditor.String(),
+		Amount:  attestation.Deposit,
 	})
 }
 
