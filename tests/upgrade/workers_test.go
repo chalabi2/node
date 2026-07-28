@@ -30,14 +30,15 @@ import (
 	ev1 "pkg.akt.dev/go/node/escrow/v1"
 	mv1 "pkg.akt.dev/go/node/market/v1"
 	mvbeta "pkg.akt.dev/go/node/market/v1beta5"
+	vtypes "pkg.akt.dev/go/node/verification/v1"
 	"pkg.akt.dev/go/sdkutil"
 
-	akash "pkg.akt.dev/node/v2/app"
-	uttypes "pkg.akt.dev/node/v2/tests/upgrade/types"
+	akash "pkg.akt.dev/node/v3/app"
+	uttypes "pkg.akt.dev/node/v3/tests/upgrade/types"
 )
 
 func init() {
-	uttypes.RegisterPostUpgradeWorker("v2.0.0", &postUpgrade{})
+	uttypes.RegisterPostUpgradeWorker("v3.0.0", &postUpgrade{})
 }
 
 type postUpgrade struct {
@@ -91,6 +92,17 @@ func (pu *postUpgrade) Run(ctx context.Context, t *testing.T, params uttypes.Tes
 	mcl, err := client.DiscoverClient(ctx, mainCctx, opts...)
 	require.NoError(t, err)
 	require.NotNil(t, mcl)
+
+	verificationParams, err := mcl.Query().Verification().Params(ctx, &vtypes.QueryParamsRequest{})
+	require.NoError(t, err)
+	require.NotNil(t, verificationParams)
+	require.False(t, verificationParams.Params.VerificationModuleActive)
+
+	_, err = mcl.Tx().BroadcastMsgs(ctx, []sdk.Msg{&vtypes.MsgUpdateParams{
+		Authority: mainAddr.String(),
+		Params:    verificationParams.Params,
+	}})
+	require.ErrorContains(t, err, "invalid authority")
 
 	// should not be able to deploy smart contract directly
 	wasm, err := os.ReadFile(fmt.Sprintf("%s/tests/upgrade/testdata/hackatom.wasm", params.SourceDir))

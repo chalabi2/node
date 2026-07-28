@@ -9,7 +9,7 @@ import (
 	ptypes "pkg.akt.dev/go/node/provider/v1beta4"
 	vtypes "pkg.akt.dev/go/node/verification/v1"
 
-	verificationtypes "pkg.akt.dev/node/v2/x/verification/types"
+	verificationtypes "pkg.akt.dev/node/v3/x/verification/types"
 )
 
 func (ms msgServer) bidFilter(ctx sdk.Context, msg *mvbeta.MsgCreateBid, order mvbeta.Order, provider sdk.AccAddress, prov ptypes.Provider) error {

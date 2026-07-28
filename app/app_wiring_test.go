@@ -17,9 +17,9 @@ import (
 
 	"pkg.akt.dev/go/sdkutil"
 
-	"pkg.akt.dev/node/v2/x/market"
-	"pkg.akt.dev/node/v2/x/provider"
-	"pkg.akt.dev/node/v2/x/verification"
+	"pkg.akt.dev/node/v3/x/market"
+	"pkg.akt.dev/node/v3/x/provider"
+	"pkg.akt.dev/node/v3/x/verification"
 )
 
 func TestOrderEndBlockersRunsVerificationBetweenMarketAndGov(t *testing.T) {
