@@ -113,6 +113,7 @@ func NewAppModule(
 	keeper keeper.IKeeper,
 	ekeeper ekeeper.Keeper,
 	akeeper akeeper.Keeper,
+	vkeeper handler.VerificationKeeper,
 	dkeeper handler.DeploymentKeeper,
 	pkeeper handler.ProviderKeeper,
 	acckeeper govtypes.AccountKeeper,
@@ -122,14 +123,15 @@ func NewAppModule(
 	return AppModule{
 		AppModuleBasic: AppModuleBasic{cdc: cdc},
 		keepers: handler.Keepers{
-			Account:    acckeeper,
-			Escrow:     ekeeper,
-			Audit:      akeeper,
-			Market:     keeper,
-			Deployment: dkeeper,
-			Provider:   pkeeper,
-			Authz:      authzkeeper,
-			Bank:       bkeeper,
+			Account:      acckeeper,
+			Escrow:       ekeeper,
+			Audit:        akeeper,
+			Verification: vkeeper,
+			Market:       keeper,
+			Deployment:   dkeeper,
+			Provider:     pkeeper,
+			Authz:        authzkeeper,
+			Bank:         bkeeper,
 		},
 	}
 }
@@ -180,7 +182,7 @@ func (am AppModule) ExportGenesis(ctx sdk.Context, cdc codec.JSONCodec) json.Raw
 
 // ConsensusVersion implements module.AppModule#ConsensusVersion
 func (am AppModule) ConsensusVersion() uint64 {
-	return 9
+	return 10
 }
 
 // AppModuleSimulation functions
