@@ -7,7 +7,6 @@ import (
 	"github.com/cosmos/cosmos-sdk/telemetry"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	govtypes "github.com/cosmos/cosmos-sdk/x/gov/types"
-	atypes "pkg.akt.dev/go/node/audit/v1"
 	dbeta "pkg.akt.dev/go/node/deployment/v1beta4"
 	mv1 "pkg.akt.dev/go/node/market/v1"
 	mvbeta "pkg.akt.dev/go/node/market/v1beta5"
@@ -81,19 +80,8 @@ func (ms msgServer) CreateBid(goCtx context.Context, msg *mvbeta.MsgCreateBid) (
 		return nil, mv1.ErrUnknownProvider
 	}
 
-	provAttr, _ := ms.keepers.Audit.GetProviderAttributes(ctx, provider)
-
-	provAttr = append([]atypes.AuditedProvider{{
-		Owner:      msg.ID.Provider,
-		Attributes: prov.Attributes,
-	}}, provAttr...)
-
-	if !order.MatchRequirements(provAttr) {
-		return nil, mv1.ErrAttributeMismatch
-	}
-
-	if !order.MatchResourcesRequirements(prov.Attributes) {
-		return nil, mv1.ErrCapabilitiesMismatch
+	if err := ms.bidFilter(ctx, msg, order, provider, prov); err != nil {
+		return nil, err
 	}
 
 	deposits, err := ms.keepers.Escrow.AuthorizeDeposits(ctx, msg)

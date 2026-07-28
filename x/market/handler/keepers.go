@@ -15,6 +15,7 @@ import (
 	escrowid "pkg.akt.dev/go/node/escrow/id/v1"
 	etypes "pkg.akt.dev/go/node/escrow/types/v1"
 	ptypes "pkg.akt.dev/go/node/provider/v1beta4"
+	vtypes "pkg.akt.dev/go/node/verification/v1"
 
 	"pkg.akt.dev/node/v2/x/market/keeper"
 )
@@ -39,6 +40,16 @@ type AuditKeeper interface {
 	GetProviderAttributes(ctx sdk.Context, id sdk.Address) (atypes.AuditedProviders, bool)
 }
 
+type VerificationKeeper interface {
+	IsVerificationActive(sdk.Context) bool
+	GetProviderValidAttestations(sdk.Context, sdk.Address) ([]vtypes.AttestationRecord, bool)
+	IsProviderSnapshotCompliant(sdk.Context, sdk.Address) bool
+	GetProviderBestTier(sdk.Context, sdk.Address) vtypes.VerificationTier
+	GetProviderGraceTier(sdk.Context, sdk.Address) (vtypes.VerificationTier, bool)
+	ProviderHasCapability(sdk.Context, sdk.Address, vtypes.CapabilityFlag) bool
+	CountQualifiedAuditors(sdk.Context, sdk.Address, vtypes.VerificationTier) uint32
+}
+
 // DeploymentKeeper Interface includes deployment methods
 type DeploymentKeeper interface {
 	GetGroup(ctx sdk.Context, id dtypes.GroupID) (dbeta.Group, bool)
@@ -60,12 +71,13 @@ type BankKeeper interface {
 
 // Keepers include all modules keepers
 type Keepers struct {
-	Escrow     EscrowKeeper
-	Market     keeper.IKeeper
-	Deployment DeploymentKeeper
-	Provider   ProviderKeeper
-	Audit      AuditKeeper
-	Account    govtypes.AccountKeeper
-	Authz      AuthzKeeper
-	Bank       BankKeeper
+	Escrow       EscrowKeeper
+	Market       keeper.IKeeper
+	Deployment   DeploymentKeeper
+	Provider     ProviderKeeper
+	Audit        AuditKeeper
+	Verification VerificationKeeper
+	Account      govtypes.AccountKeeper
+	Authz        AuthzKeeper
+	Bank         BankKeeper
 }
