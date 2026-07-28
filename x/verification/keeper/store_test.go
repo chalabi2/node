@@ -74,7 +74,7 @@ func TestRequiredProviderBondUsesSpecUnitConversions(t *testing.T) {
 		TotalStorageMB: 1048576,
 	}
 
-	got := requiredProviderBond(DefaultParams(), vtypes.TierVerified, resources)
+	got := RequiredProviderBond(DefaultParams(), vtypes.TierVerified, resources)
 	require.Equal(t, sdk.NewInt64Coin(bondDenom, 104500000), got)
 }
 

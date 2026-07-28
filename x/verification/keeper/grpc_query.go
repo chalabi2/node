@@ -264,7 +264,7 @@ func (k Querier) ProviderBond(c context.Context, req *vtypes.QueryProviderBondRe
 	}
 
 	snapshot, _ := k.Keeper.GetProviderSnapshot(ctx, provider)
-	required := requiredProviderBond(k.Keeper.GetParams(ctx), k.currentProviderTier(ctx, provider), snapshot.ResourceSummary)
+	required := RequiredProviderBond(k.Keeper.GetParams(ctx), k.currentProviderTier(ctx, provider), snapshot.ResourceSummary)
 	return &vtypes.QueryProviderBondResponse{
 		Bond:                   record,
 		RequiredForCurrentTier: required,

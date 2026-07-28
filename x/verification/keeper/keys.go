@@ -125,7 +125,13 @@ func snapshotComplianceQueueKey(deadline time.Time, provider sdk.AccAddress) []b
 	return timeQueueKey(prefixQueueSnapshotCompliance, deadline, provider)
 }
 
-func providerBondUnbondingQueueKey(completion time.Time, provider sdk.AccAddress) []byte {
+func providerBondUnbondingQueueKey(completion time.Time, provider sdk.AccAddress, sequence uint32) []byte {
+	sequenceKey := make([]byte, 4)
+	binary.BigEndian.PutUint32(sequenceKey, sequence)
+	return timeQueueKey(prefixQueueProviderBondUnbonding, completion, provider, sequenceKey)
+}
+
+func providerBondUnbondingQueuePrefix(completion time.Time, provider sdk.AccAddress) []byte {
 	return timeQueueKey(prefixQueueProviderBondUnbonding, completion, provider)
 }
 

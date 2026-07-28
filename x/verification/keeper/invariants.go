@@ -2,6 +2,7 @@ package keeper
 
 import (
 	"fmt"
+	"time"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
 
@@ -201,7 +202,7 @@ func ProviderBondInvariant(k Keeper) sdk.Invariant {
 				broken = fmt.Sprintf("provider %s has no bond for %s attestation", attestation.Provider, attestation.Tier)
 				return true
 			}
-			required := requiredProviderBond(params, attestation.Tier, snapshot.ResourceSummary)
+			required := RequiredProviderBond(params, attestation.Tier, snapshot.ResourceSummary)
 			if requireCoinAtLeast(bond.BondedAmount, required, moduletypes.ErrInsufficientProviderBond) != nil {
 				broken = fmt.Sprintf("provider %s bond %s below required %s", attestation.Provider, bond.BondedAmount, required)
 				return true
@@ -352,10 +353,10 @@ func checkDiscrepancyConsistency(k Keeper, ctx sdk.Context, record vtypes.Discre
 			return err
 		}
 	}
-	if err := requireDiscrepancyAttestation(k, ctx, provider, auditorA, record.ID, record.ResolutionStatus); err != nil {
+	if err := requireDiscrepancyAttestation(k, ctx, provider, auditorA, record.ID, record.ResolutionStatus, record.Timestamp); err != nil {
 		return err
 	}
-	return requireDiscrepancyAttestation(k, ctx, provider, auditorB, record.ID, record.ResolutionStatus)
+	return requireDiscrepancyAttestation(k, ctx, provider, auditorB, record.ID, record.ResolutionStatus, record.Timestamp)
 }
 
 func requireFrozenAuditor(k Keeper, ctx sdk.Context, auditor sdk.AccAddress) error {
@@ -373,10 +374,14 @@ func requireDiscrepancyAttestation(
 	auditor sdk.AccAddress,
 	discrepancyID uint64,
 	status vtypes.DiscrepancyStatus,
+	detectedAt time.Time,
 ) error {
 	attestation, found := k.GetAttestation(ctx, provider, auditor)
 	if !found {
 		return fmt.Errorf("missing discrepancy attestation %s/%s", provider, auditor)
+	}
+	if status == vtypes.DiscrepancyStatusTimedOut && attestation.CreatedAt.After(detectedAt) {
+		return nil
 	}
 	if attestation.Status != vtypes.AttestationStatusVoided || attestation.VoidedReason != vtypes.VoidedReasonDiscrepancy {
 		return fmt.Errorf("attestation %s/%s is not voided for discrepancy", provider, auditor)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"math"
 	"testing"
 	"time"
 
@@ -153,6 +154,124 @@ func TestValidateGenesisRejectsInvalidParamsAndRelationships(t *testing.T) {
 		state.AuditEscrows = []vtypes.AuditEscrowRecord{escrow}
 		state.NextAuditEscrowID = escrow.ID
 		require.Error(t, ValidateGenesis(state))
+	})
+}
+
+func TestValidateGenesisRejectsImpossibleImportedState(t *testing.T) {
+	provider := testutil.AccAddress(t)
+	auditor := testutil.AccAddress(t)
+	require.NoError(t, ValidateGenesis(validGenesisState(provider, auditor)))
+
+	t.Run("consumption at expiry", func(t *testing.T) {
+		state := validGenesisState(provider, auditor)
+		state.AuditEscrows[0].ConsumedAt = &state.AuditEscrows[0].ExpiresAt
+		requireGenesisError(t, state, "invalid audit escrow consumption time")
+	})
+	t.Run("consumed escrow without attestation", func(t *testing.T) {
+		state := validGenesisState(provider, auditor)
+		state.Attestations = nil
+		requireGenesisError(t, state, "consumed audit escrow must reference one attestation")
+	})
+	t.Run("attestation below requested tier", func(t *testing.T) {
+		state := validGenesisState(provider, auditor)
+		state.AuditEscrows[0].RequestedTier = vtypes.TierEstablished
+		requireGenesisError(t, state, "attestation does not satisfy its audit escrow request")
+	})
+	t.Run("attestation missing requested capability", func(t *testing.T) {
+		state := validGenesisState(provider, auditor)
+		state.AuditEscrows[0].RequestedCapabilities = []vtypes.CapabilityFlag{
+			vtypes.CapabilityPersistentStorage,
+		}
+		requireGenesisError(t, state, "attestation does not satisfy its audit escrow request")
+	})
+	t.Run("provider fault returns deposit", func(t *testing.T) {
+		state := validGenesisState(provider, auditor)
+		state.Attestations = nil
+		escrow := &state.AuditEscrows[0]
+		escrow.Status = vtypes.AuditEscrowStatusSettled
+		escrow.FeeStatus = vtypes.FeeStatusReturnedToProvider
+		escrow.ProviderDepositStatus = vtypes.ProviderDepositStatusReturnedToProvider
+		escrow.SettlementReason = vtypes.AuditEscrowSettlementReasonProviderFault
+		escrow.FaultAttribution = vtypes.FaultAttributionProviderFault
+		requireGenesisError(t, state, "provider-fault escrow has inconsistent attribution")
+	})
+	t.Run("unconsumed fee released to auditor", func(t *testing.T) {
+		state := validGenesisState(provider, auditor)
+		state.Attestations = nil
+		escrow := &state.AuditEscrows[0]
+		escrow.ConsumedByAuditor = ""
+		escrow.ConsumedAt = nil
+		escrow.Status = vtypes.AuditEscrowStatusSettled
+		escrow.FeeStatus = vtypes.FeeStatusReleasedToAuditor
+		escrow.ProviderDepositStatus = vtypes.ProviderDepositStatusReturnedToProvider
+		escrow.SettlementReason = vtypes.AuditEscrowSettlementReasonNoFault
+		escrow.FaultAttribution = vtypes.FaultAttributionNoFault
+		requireGenesisError(t, state, "unconsumed escrow fee was not returned to provider")
+	})
+	t.Run("frozen auditor without pending discrepancy", func(t *testing.T) {
+		state := validGenesisState(provider, auditor)
+		state.Auditors[0].Status = vtypes.AuditorStatusFrozen
+		state.Auditors[0].BondStatus = vtypes.BondStatusFrozen
+		requireGenesisError(t, state, "frozen auditor has no pending discrepancy")
+	})
+	t.Run("valid attestation exceeds auditor authority", func(t *testing.T) {
+		state := validGenesisState(provider, auditor)
+		state.Auditors[0].MaxAttestationTier = vtypes.TierIdentified
+		requireGenesisError(t, state, "valid attestation exceeds auditor authority")
+	})
+	t.Run("valid attestation missing snapshot", func(t *testing.T) {
+		state := validGenesisState(provider, auditor)
+		state.ProviderSnapshots = nil
+		requireGenesisError(t, state, "valid attestation requires a compliant provider snapshot")
+	})
+	t.Run("valid attestation has insufficient bond", func(t *testing.T) {
+		state := validGenesisState(provider, auditor)
+		state.ProviderBonds[0].BondedAmount = sdk.NewInt64Coin("uakt", 0)
+		requireGenesisError(t, state, "provider bond does not support valid attestation")
+	})
+	t.Run("resolved discrepancy missing evidence", func(t *testing.T) {
+		state := validGenesisState(provider, auditor)
+		auditorB := testutil.AccAddress(t)
+		state.Auditors = append(state.Auditors, genesisAuditor(auditorB))
+		state.Discrepancies = []vtypes.DiscrepancyEvent{{
+			ID:                   1,
+			Provider:             provider.String(),
+			AuditorA:             auditor.String(),
+			AuditorATier:         vtypes.TierVerified,
+			AuditorB:             auditorB.String(),
+			AuditorBTier:         vtypes.TierEstablished,
+			Timestamp:            genesisNow(),
+			ResolutionStatus:     vtypes.DiscrepancyStatusResolved,
+			ResolutionReason:     vtypes.DiscrepancyResolutionReasonEvidenceInconclusive,
+			FaultAttribution:     vtypes.FaultAttributionNoFault,
+			GraceRecordID:        0,
+			ResolutionProposalID: 1,
+		}}
+		state.NextDiscrepancyID = 2
+		requireGenesisError(t, state, "resolution evidence hash must be 32 bytes")
+	})
+	t.Run("timed out discrepancy missing attestation", func(t *testing.T) {
+		state := validGenesisState(provider, auditor)
+		auditorB := testutil.AccAddress(t)
+		state.Auditors = append(state.Auditors, genesisAuditor(auditorB))
+		state.Discrepancies = []vtypes.DiscrepancyEvent{{
+			ID:               1,
+			Provider:         provider.String(),
+			AuditorA:         auditor.String(),
+			AuditorATier:     vtypes.TierVerified,
+			AuditorB:         auditorB.String(),
+			AuditorBTier:     vtypes.TierEstablished,
+			Timestamp:        genesisNow(),
+			ResolutionStatus: vtypes.DiscrepancyStatusTimedOut,
+			FaultAttribution: vtypes.FaultAttributionInconclusive,
+		}}
+		state.NextDiscrepancyID = 2
+		requireGenesisError(t, state, "missing or not voided")
+	})
+	t.Run("next id would overflow", func(t *testing.T) {
+		state := validGenesisState(provider, auditor)
+		state.NextGraceRecordID = math.MaxUint64
+		requireGenesisError(t, state, "invalid next grace record ID")
 	})
 }
 
@@ -328,6 +447,27 @@ func genesisDiscrepancy(provider, auditorA, auditorB sdk.AccAddress) vtypes.Disc
 		Timestamp:        genesisNow(),
 		ResolutionStatus: vtypes.DiscrepancyStatusPending,
 	}
+}
+
+func validGenesisState(provider, auditor sdk.AccAddress) *vtypes.GenesisState {
+	params := keeper.DefaultParams()
+	attestation := genesisAttestation(provider, auditor, 7, vtypes.TierVerified, params.MinFeeL2)
+	return &vtypes.GenesisState{
+		Params:            params,
+		Auditors:          []vtypes.AuditorRecord{genesisAuditor(auditor)},
+		Attestations:      []vtypes.AttestationRecord{attestation},
+		ProviderBonds:     []vtypes.ProviderBondRecord{genesisProviderBond(provider)},
+		ProviderSnapshots: []vtypes.ProviderSnapshotRecord{genesisProviderSnapshot(provider)},
+		AuditEscrows:      []vtypes.AuditEscrowRecord{genesisAuditEscrow(provider, auditor, attestation)},
+		NextDiscrepancyID: 1,
+		NextAuditEscrowID: 8,
+		NextGraceRecordID: 1,
+	}
+}
+
+func requireGenesisError(t testing.TB, state *vtypes.GenesisState, message string) {
+	t.Helper()
+	require.ErrorContains(t, ValidateGenesis(state), message)
 }
 
 func genesisNow() time.Time {

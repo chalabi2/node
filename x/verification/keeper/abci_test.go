@@ -172,6 +172,41 @@ func TestEndBlockerCompletesAuditorBondUnbonding(t *testing.T) {
 	}, bank.moduleToAccount)
 }
 
+func TestEndBlockerCapsProviderBondUnbondingEntries(t *testing.T) {
+	bank := &recordingBank{}
+	ctx, k := setupStoreKeeperWithOptions(t, WithBankKeeper(bank))
+	params := k.GetParams(ctx)
+	params.MaxEndblockerUnbondingCompletions = 1
+	k.SetParams(ctx, params)
+
+	provider := testutil.AccAddress(t)
+	first := sdk.NewInt64Coin(bondDenom, 10000000)
+	second := sdk.NewInt64Coin(bondDenom, 20000000)
+	require.NoError(t, k.SetProviderBond(ctx, providerBondRecord(provider)))
+	require.NoError(t, k.WithdrawProviderBond(ctx, provider, first))
+	require.NoError(t, k.WithdrawProviderBond(ctx, provider, second))
+
+	ctx = ctx.WithBlockTime(ctx.BlockTime().Add(params.ProviderBondUnbondingPeriod))
+	require.NoError(t, k.EndBlocker(ctx))
+
+	bond, found := k.GetProviderBond(ctx, provider)
+	require.True(t, found)
+	require.Len(t, bond.UnbondingEntries, 1)
+	require.Equal(t, second, bond.UnbondingEntries[0].Amount)
+	require.Equal(t, []bankTransfer{
+		{to: provider, module: moduletypes.ModuleName, amt: sdk.NewCoins(first)},
+	}, bank.moduleToAccount)
+
+	require.NoError(t, k.EndBlocker(ctx))
+	bond, found = k.GetProviderBond(ctx, provider)
+	require.True(t, found)
+	require.Empty(t, bond.UnbondingEntries)
+	require.Equal(t, []bankTransfer{
+		{to: provider, module: moduletypes.ModuleName, amt: sdk.NewCoins(first)},
+		{to: provider, module: moduletypes.ModuleName, amt: sdk.NewCoins(second)},
+	}, bank.moduleToAccount)
+}
+
 func TestEndBlockerSuspendsSnapshotCompliance(t *testing.T) {
 	ctx, k := setupStoreKeeper(t)
 	provider := testutil.AccAddress(t)

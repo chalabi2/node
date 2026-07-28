@@ -7,7 +7,8 @@ import (
 	vtypes "pkg.akt.dev/go/node/verification/v1"
 )
 
-func requiredProviderBond(params vtypes.Params, tier vtypes.VerificationTier, resources vtypes.ResourceSummary) sdk.Coin {
+// RequiredProviderBond returns the resource-weighted bond for a verification tier.
+func RequiredProviderBond(params vtypes.Params, tier vtypes.VerificationTier, resources vtypes.ResourceSummary) sdk.Coin {
 	switch tier {
 	case vtypes.TierVerified:
 		return sumResourceBond(resources, params.BondGpuL2, params.BondVcpuL2, params.BondMemGbL2, params.BondStorageTbL2)

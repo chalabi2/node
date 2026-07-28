@@ -160,7 +160,7 @@ func (k *keeper) processSnapshotComplianceQueue(ctx sdk.Context, blockTime time.
 
 func (k *keeper) processProviderBondUnbondingQueue(ctx sdk.Context, blockTime time.Time, limit uint32) error {
 	return k.processDueQueue(ctx, prefixQueueProviderBondUnbonding, blockTime, limit, func(key []byte, completion time.Time) error {
-		provider, err := decodeAddressQueueKey(key)
+		provider, err := decodeProviderBondUnbondingQueueKey(key)
 		if err != nil {
 			return err
 		}
@@ -170,26 +170,22 @@ func (k *keeper) processProviderBondUnbondingQueue(ctx sdk.Context, blockTime ti
 			return nil
 		}
 
-		remaining := make([]vtypes.UnbondingEntry, 0, len(record.UnbondingEntries))
-		var completed sdk.Coin
-		for _, entry := range record.UnbondingEntries {
-			if entry.CompletionTime.After(completion) {
-				remaining = append(remaining, entry)
-				continue
-			}
-			completed, err = addCoin(completed, entry.Amount)
-			if err != nil {
-				return err
+		entryIndex := -1
+		for i, entry := range record.UnbondingEntries {
+			if entry.CompletionTime.Equal(completion) {
+				entryIndex = i
+				break
 			}
 		}
-		if completed.IsNil() || completed.IsZero() {
+		if entryIndex == -1 {
 			return nil
 		}
+		completed := record.UnbondingEntries[entryIndex].Amount
 		if err = k.sendModuleToAccount(ctx, provider, completed); err != nil {
 			return err
 		}
 
-		record.UnbondingEntries = remaining
+		record.UnbondingEntries = append(record.UnbondingEntries[:entryIndex], record.UnbondingEntries[entryIndex+1:]...)
 		return k.SetProviderBond(ctx, record)
 	})
 }

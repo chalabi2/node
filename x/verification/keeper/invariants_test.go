@@ -128,6 +128,35 @@ func TestDiscrepancyConsistencyInvariant(t *testing.T) {
 	require.True(t, broken)
 }
 
+func TestDiscrepancyConsistencyInvariantAllowsPostTimeoutReplacement(t *testing.T) {
+	ctx, k := setupStoreKeeper(t)
+	provider := testutil.AccAddress(t)
+	auditorA := testutil.AccAddress(t)
+	auditorB := testutil.AccAddress(t)
+
+	setupPendingDiscrepancy(t, ctx, k, provider, auditorA, auditorB)
+	discrepancy, found := k.GetDiscrepancy(ctx, 1)
+	require.True(t, found)
+	discrepancy.ResolutionStatus = vtypes.DiscrepancyStatusTimedOut
+	discrepancy.FaultAttribution = vtypes.FaultAttributionInconclusive
+	k.SetDiscrepancy(ctx, discrepancy)
+
+	for _, auditor := range []sdk.AccAddress{auditorA, auditorB} {
+		attestation, found := k.GetAttestation(ctx, provider, auditor)
+		require.True(t, found)
+		attestation.FeeStatus = vtypes.FeeStatusReturnedToProvider
+		attestation.DepositStatus = vtypes.DepositStatusSlashed
+		require.NoError(t, k.SetAttestation(ctx, attestation))
+	}
+
+	replacement := attestationRecord(provider, auditorA)
+	replacement.CreatedAt = discrepancy.Timestamp.Add(time.Second)
+	require.NoError(t, k.SetAttestation(ctx, replacement))
+
+	_, broken := DiscrepancyConsistencyInvariant(k)(ctx)
+	require.False(t, broken)
+}
+
 func TestAuditEscrowInvariant(t *testing.T) {
 	ctx, k := setupStoreKeeper(t)
 	provider := testutil.AccAddress(t)

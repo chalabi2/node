@@ -78,6 +78,20 @@ func decodeAddressQueueKey(key []byte) (sdk.AccAddress, error) {
 	return sdk.AccAddress(append([]byte(nil), key[8:]...)), nil
 }
 
+func decodeProviderBondUnbondingQueueKey(key []byte) (sdk.AccAddress, error) {
+	if len(key) <= 12 {
+		return nil, errorsmod.Wrap(moduletypes.ErrInvalidReason, "malformed provider bond unbonding queue key")
+	}
+	return sdk.AccAddress(append([]byte(nil), key[8:len(key)-4]...)), nil
+}
+
+func decodeProviderBondUnbondingSequence(key []byte) (uint32, error) {
+	if len(key) <= 12 {
+		return 0, errorsmod.Wrap(moduletypes.ErrInvalidReason, "malformed provider bond unbonding queue key")
+	}
+	return binary.BigEndian.Uint32(key[len(key)-4:]), nil
+}
+
 func decodeIDQueueKey(key []byte) (uint64, error) {
 	if len(key) != 16 {
 		return 0, errorsmod.Wrap(moduletypes.ErrInvalidReason, "malformed id queue key")

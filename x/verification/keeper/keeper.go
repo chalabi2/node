@@ -39,6 +39,7 @@ type Keeper interface {
 	WithDiscrepancies(sdk.Context, vtypes.DiscrepancyStatus, func(vtypes.DiscrepancyEvent) bool)
 	GetProviderBond(sdk.Context, sdk.AccAddress) (vtypes.ProviderBondRecord, bool)
 	SetProviderBond(sdk.Context, vtypes.ProviderBondRecord) error
+	QueueProviderBondUnbonding(sdk.Context, sdk.AccAddress, time.Time) error
 	WithProviderBonds(sdk.Context, func(vtypes.ProviderBondRecord) bool)
 	GetProviderSnapshot(sdk.Context, sdk.AccAddress) (vtypes.ProviderSnapshotRecord, bool)
 	SetProviderSnapshot(sdk.Context, vtypes.ProviderSnapshotRecord) error

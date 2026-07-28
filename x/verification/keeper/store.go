@@ -2,8 +2,12 @@ package keeper
 
 import (
 	"bytes"
+	"math"
+	"time"
 
+	errorsmod "cosmossdk.io/errors"
 	"cosmossdk.io/store/prefix"
+	storetypes "cosmossdk.io/store/types"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	proto "github.com/cosmos/gogoproto/proto"
 
@@ -229,9 +233,32 @@ func (k *keeper) SetProviderBond(ctx sdk.Context, record vtypes.ProviderBondReco
 
 	store := ctx.KVStore(k.skey)
 	store.Set(addressKey(prefixProviderBond, provider), k.cdc.MustMarshal(&record))
-	for _, entry := range record.UnbondingEntries {
-		store.Set(providerBondUnbondingQueueKey(entry.CompletionTime, provider), []byte{})
+	return nil
+}
+
+func (k *keeper) QueueProviderBondUnbonding(ctx sdk.Context, provider sdk.AccAddress, completion time.Time) error {
+	store := prefix.NewStore(ctx.KVStore(k.skey), singletonKey(prefixQueueProviderBondUnbonding))
+	keyPrefix := providerBondUnbondingQueuePrefix(completion, provider)[1:]
+	iter := store.Iterator(keyPrefix, storetypes.PrefixEndBytes(keyPrefix))
+	defer func() {
+		_ = iter.Close()
+	}()
+
+	var sequence uint32
+	for ; iter.Valid(); iter.Next() {
+		current, err := decodeProviderBondUnbondingSequence(iter.Key())
+		if err != nil {
+			return err
+		}
+		if current == math.MaxUint32 {
+			return errorsmod.Wrap(moduletypes.ErrInvalidReason, "provider bond unbonding queue sequence exhausted")
+		}
+		if current >= sequence {
+			sequence = current + 1
+		}
 	}
+
+	store.Set(providerBondUnbondingQueueKey(completion, provider, sequence)[1:], []byte{})
 	return nil
 }
 

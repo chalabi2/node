@@ -316,7 +316,9 @@ func (k *keeper) WithdrawProviderBond(ctx sdk.Context, provider sdk.AccAddress, 
 		return err
 	}
 
-	ctx.KVStore(k.skey).Set(providerBondUnbondingQueueKey(completion, provider), []byte{})
+	if err := k.QueueProviderBondUnbonding(ctx, provider, completion); err != nil {
+		return err
+	}
 	if err := k.voidUnsupportedProviderAttestations(ctx, provider, remaining, SettlementPathBondWithdrawn, vtypes.VoidedReasonBondWithdrawn); err != nil {
 		return err
 	}
@@ -1250,7 +1252,7 @@ func (k *keeper) providerBondSupportsAttestation(ctx sdk.Context, provider sdk.A
 		return false
 	}
 
-	required := requiredProviderBond(k.GetParams(ctx), attestation.Tier, snapshot.ResourceSummary)
+	required := RequiredProviderBond(k.GetParams(ctx), attestation.Tier, snapshot.ResourceSummary)
 	return requireCoinAtLeast(bonded, required, moduletypes.ErrInsufficientProviderBond) == nil
 }
 
@@ -1421,7 +1423,7 @@ func (k *keeper) validateProviderPrerequisites(ctx sdk.Context, provider sdk.Acc
 		if !found {
 			return moduletypes.ErrInsufficientProviderBond
 		}
-		required := requiredProviderBond(params, tier, snapshot.ResourceSummary)
+		required := RequiredProviderBond(params, tier, snapshot.ResourceSummary)
 		if err := requireCoinAtLeast(bond.BondedAmount, required, moduletypes.ErrInsufficientProviderBond); err != nil {
 			return err
 		}

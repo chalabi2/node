@@ -3,6 +3,7 @@ package verification
 import (
 	"crypto/sha256"
 	"encoding/json"
+	"math"
 
 	errorsmod "cosmossdk.io/errors"
 	"github.com/cosmos/cosmos-sdk/codec"
@@ -24,7 +25,7 @@ func ValidateGenesis(data *vtypes.GenesisState) error {
 	}
 
 	denom := data.Params.BondL1.Denom
-	seenAuditors := make(map[string]struct{}, len(data.Auditors))
+	seenAuditors := make(map[string]vtypes.AuditorRecord, len(data.Auditors))
 	for _, record := range data.Auditors {
 		if _, err := sdk.AccAddressFromBech32(record.Address); err != nil {
 			return sdkerrors.ErrInvalidAddress.Wrap("verification: invalid auditor address")
@@ -32,7 +33,7 @@ func ValidateGenesis(data *vtypes.GenesisState) error {
 		if _, exists := seenAuditors[record.Address]; exists {
 			return errorsmod.Wrap(moduletypes.ErrInvalidReason, "verification: duplicate auditor")
 		}
-		seenAuditors[record.Address] = struct{}{}
+		seenAuditors[record.Address] = record
 		if err := validateTier(record.MaxAttestationTier); err != nil {
 			return err
 		}
@@ -85,6 +86,7 @@ func ValidateGenesis(data *vtypes.GenesisState) error {
 	}
 
 	seenEscrows := make(map[uint64]vtypes.AuditEscrowRecord, len(data.AuditEscrows))
+	attestationsByEscrow := make(map[uint64]uint32, len(data.Attestations))
 	var maxEscrowID uint64
 	for _, record := range data.AuditEscrows {
 		if record.ID == 0 {
@@ -172,8 +174,25 @@ func ValidateGenesis(data *vtypes.GenesisState) error {
 			!escrow.Fee.IsEqual(record.Fee) {
 			return errorsmod.Wrap(moduletypes.ErrInvalidReason, "verification: attestation and audit escrow relationship is inconsistent")
 		}
+		if !vtypes.TierAtLeast(record.Tier, escrow.RequestedTier) ||
+			!genesisCapabilitiesInclude(record.Capabilities, escrow.RequestedCapabilities) {
+			return errorsmod.Wrap(moduletypes.ErrInvalidReason, "verification: attestation does not satisfy its audit escrow request")
+		}
 		if err := validateAttestationEscrowLifecycle(record, escrow); err != nil {
 			return err
+		}
+		attestationsByEscrow[record.AuditEscrowID]++
+	}
+
+	for _, escrow := range data.AuditEscrows {
+		count := attestationsByEscrow[escrow.ID]
+		if escrow.Status == vtypes.AuditEscrowStatusConsumed && count != 1 {
+			return errorsmod.Wrap(moduletypes.ErrInvalidReason, "verification: consumed audit escrow must reference one attestation")
+		}
+		if escrow.Status != vtypes.AuditEscrowStatusConsumed &&
+			escrow.Status != vtypes.AuditEscrowStatusSettled &&
+			count != 0 {
+			return errorsmod.Wrap(moduletypes.ErrInvalidReason, "verification: unconsumed audit escrow references an attestation")
 		}
 	}
 
@@ -213,8 +232,12 @@ func ValidateGenesis(data *vtypes.GenesisState) error {
 		if record.Timestamp.IsZero() {
 			return errorsmod.Wrap(moduletypes.ErrInvalidReason, "verification: discrepancy timestamp is required")
 		}
-		if record.ResolutionStatus == vtypes.DiscrepancyStatusPending {
-			if err := validatePendingDiscrepancyRelationships(record, data.Attestations, data.Auditors, data.Discrepancies); err != nil {
+		if err := validateGenesisDiscrepancyResolution(record); err != nil {
+			return err
+		}
+		if record.ResolutionStatus == vtypes.DiscrepancyStatusPending ||
+			record.ResolutionStatus == vtypes.DiscrepancyStatusTimedOut {
+			if err := validateDiscrepancyRelationships(record, data.Attestations, data.Auditors, data.Discrepancies); err != nil {
 				return err
 			}
 		}
@@ -224,7 +247,14 @@ func ValidateGenesis(data *vtypes.GenesisState) error {
 		}
 	}
 
-	seenProviderBonds := make(map[string]struct{}, len(data.ProviderBonds))
+	for _, auditor := range data.Auditors {
+		if auditor.BondStatus == vtypes.BondStatusFrozen &&
+			!auditorHasPendingGenesisDiscrepancy(data.Discrepancies, auditor.Address) {
+			return errorsmod.Wrap(moduletypes.ErrInvalidReason, "verification: frozen auditor has no pending discrepancy")
+		}
+	}
+
+	seenProviderBonds := make(map[string]vtypes.ProviderBondRecord, len(data.ProviderBonds))
 	for _, record := range data.ProviderBonds {
 		if _, err := sdk.AccAddressFromBech32(record.Provider); err != nil {
 			return sdkerrors.ErrInvalidAddress.Wrap("verification: invalid provider bond address")
@@ -232,7 +262,7 @@ func ValidateGenesis(data *vtypes.GenesisState) error {
 		if _, exists := seenProviderBonds[record.Provider]; exists {
 			return errorsmod.Wrap(moduletypes.ErrInvalidReason, "verification: duplicate provider bond")
 		}
-		seenProviderBonds[record.Provider] = struct{}{}
+		seenProviderBonds[record.Provider] = record
 		if err := validateGenesisCoin("provider bonded amount", record.BondedAmount, denom, true); err != nil {
 			return err
 		}
@@ -252,7 +282,7 @@ func ValidateGenesis(data *vtypes.GenesisState) error {
 		}
 	}
 
-	seenProviderSnapshots := make(map[string]struct{}, len(data.ProviderSnapshots))
+	seenProviderSnapshots := make(map[string]vtypes.ProviderSnapshotRecord, len(data.ProviderSnapshots))
 	for _, record := range data.ProviderSnapshots {
 		if _, err := sdk.AccAddressFromBech32(record.Provider); err != nil {
 			return sdkerrors.ErrInvalidAddress.Wrap("verification: invalid provider snapshot address")
@@ -260,7 +290,7 @@ func ValidateGenesis(data *vtypes.GenesisState) error {
 		if _, exists := seenProviderSnapshots[record.Provider]; exists {
 			return errorsmod.Wrap(moduletypes.ErrInvalidReason, "verification: duplicate provider snapshot")
 		}
-		seenProviderSnapshots[record.Provider] = struct{}{}
+		seenProviderSnapshots[record.Provider] = record
 		if len(record.SnapshotHash) != sha256.Size {
 			return errorsmod.Wrapf(moduletypes.ErrInvalidReason, "verification: snapshot hash must be %d bytes", sha256.Size)
 		}
@@ -270,6 +300,34 @@ func ValidateGenesis(data *vtypes.GenesisState) error {
 			record.SnapshotTimestamp.After(record.PostedAt) ||
 			!record.ComplianceDeadline.After(record.PostedAt) {
 			return errorsmod.Wrap(moduletypes.ErrInvalidReason, "verification: invalid provider snapshot timestamps")
+		}
+	}
+
+	for _, attestation := range data.Attestations {
+		if attestation.Status != vtypes.AttestationStatusValid {
+			continue
+		}
+		auditor := seenAuditors[attestation.Auditor]
+		if !vtypes.TierAtLeast(auditor.MaxAttestationTier, attestation.Tier) {
+			return errorsmod.Wrap(moduletypes.ErrInvalidReason, "verification: valid attestation exceeds auditor authority")
+		}
+		if !vtypes.TierRequiresSnapshot(attestation.Tier) {
+			continue
+		}
+		snapshot, found := seenProviderSnapshots[attestation.Provider]
+		if !found || snapshot.Suspended {
+			return errorsmod.Wrap(moduletypes.ErrInvalidReason, "verification: valid attestation requires a compliant provider snapshot")
+		}
+		if !vtypes.TierRequiresProviderBond(attestation.Tier) {
+			continue
+		}
+		bond, found := seenProviderBonds[attestation.Provider]
+		if !found {
+			return errorsmod.Wrap(moduletypes.ErrInvalidReason, "verification: valid attestation requires a provider bond")
+		}
+		required := keeper.RequiredProviderBond(data.Params, attestation.Tier, snapshot.ResourceSummary)
+		if bond.BondedAmount.Denom != required.Denom || bond.BondedAmount.Amount.LT(required.Amount) {
+			return errorsmod.Wrap(moduletypes.ErrInvalidReason, "verification: provider bond does not support valid attestation")
 		}
 	}
 
@@ -368,6 +426,15 @@ func InitGenesis(ctx sdk.Context, k keeper.Keeper, data *vtypes.GenesisState) {
 	for _, record := range data.ProviderBonds {
 		if err := k.SetProviderBond(ctx, record); err != nil {
 			panic(err)
+		}
+		provider, err := sdk.AccAddressFromBech32(record.Provider)
+		if err != nil {
+			panic(err)
+		}
+		for _, entry := range record.UnbondingEntries {
+			if err = k.QueueProviderBondUnbonding(ctx, provider, entry.CompletionTime); err != nil {
+				panic(err)
+			}
 		}
 	}
 	for _, record := range data.ProviderSnapshots {
@@ -522,7 +589,10 @@ func validateAuditEscrowLifecycle(record vtypes.AuditEscrowRecord) error {
 	if (record.ConsumedByAuditor == "") != (record.ConsumedAt == nil) {
 		return errorsmod.Wrap(moduletypes.ErrInvalidReason, "verification: audit escrow consumption state is incomplete")
 	}
-	if consumed && (record.ConsumedAt.IsZero() || record.ConsumedAt.Before(record.OpenedAt)) {
+	if consumed &&
+		(record.ConsumedAt.IsZero() ||
+			record.ConsumedAt.Before(record.OpenedAt) ||
+			!record.ConsumedAt.Before(record.ExpiresAt)) {
 		return errorsmod.Wrap(moduletypes.ErrInvalidReason, "verification: invalid audit escrow consumption time")
 	}
 
@@ -569,12 +639,17 @@ func validateAuditEscrowLifecycle(record vtypes.AuditEscrowRecord) error {
 			return errorsmod.Wrap(moduletypes.ErrInvalidReason, "verification: inconsistent settled audit escrow")
 		}
 		if record.SettlementReason == vtypes.AuditEscrowSettlementReasonProviderFault &&
-			record.FaultAttribution != vtypes.FaultAttributionProviderFault {
+			(record.FaultAttribution != vtypes.FaultAttributionProviderFault ||
+				record.ProviderDepositStatus != vtypes.ProviderDepositStatusSlashed) {
 			return errorsmod.Wrap(moduletypes.ErrInvalidReason, "verification: provider-fault escrow has inconsistent attribution")
 		}
 		if record.SettlementReason == vtypes.AuditEscrowSettlementReasonNoFault &&
-			record.FaultAttribution != vtypes.FaultAttributionNoFault {
+			(record.FaultAttribution != vtypes.FaultAttributionNoFault ||
+				record.ProviderDepositStatus != vtypes.ProviderDepositStatusReturnedToProvider) {
 			return errorsmod.Wrap(moduletypes.ErrInvalidReason, "verification: no-fault escrow has inconsistent attribution")
+		}
+		if !consumed && record.FeeStatus != vtypes.FeeStatusReturnedToProvider {
+			return errorsmod.Wrap(moduletypes.ErrInvalidReason, "verification: unconsumed escrow fee was not returned to provider")
 		}
 	}
 	return nil
@@ -640,7 +715,7 @@ func validateAttestationEscrowLifecycle(record vtypes.AttestationRecord, escrow 
 	return nil
 }
 
-func validatePendingDiscrepancyRelationships(
+func validateDiscrepancyRelationships(
 	record vtypes.DiscrepancyEvent,
 	attestations []vtypes.AttestationRecord,
 	auditors []vtypes.AuditorRecord,
@@ -648,26 +723,78 @@ func validatePendingDiscrepancyRelationships(
 ) error {
 	for _, auditor := range []string{record.AuditorA, record.AuditorB} {
 		auditorRecord, found := findGenesisAuditor(auditors, auditor)
-		if !found || auditorRecord.BondStatus != vtypes.BondStatusFrozen {
+		if !found {
+			return errorsmod.Wrap(moduletypes.ErrInvalidReason, "verification: discrepancy auditor is missing")
+		}
+		if record.ResolutionStatus == vtypes.DiscrepancyStatusPending &&
+			auditorRecord.BondStatus != vtypes.BondStatusFrozen {
 			return errorsmod.Wrap(moduletypes.ErrInvalidReason, "verification: pending discrepancy auditor is not frozen")
 		}
 		attestation, found := findGenesisAttestation(attestations, record.Provider, auditor)
+		if record.ResolutionStatus == vtypes.DiscrepancyStatusTimedOut &&
+			found &&
+			attestation.CreatedAt.After(record.Timestamp) {
+			continue
+		}
 		if !found ||
 			attestation.Status != vtypes.AttestationStatusVoided ||
 			attestation.VoidedReason != vtypes.VoidedReasonDiscrepancy {
 			return errorsmod.Wrap(moduletypes.ErrInvalidReason, "verification: pending discrepancy attestation is missing or not voided")
 		}
-		if attestation.FeeStatus == vtypes.FeeStatusEscrowed &&
-			attestation.DepositStatus == vtypes.DepositStatusPendingDiscrepancy {
-			continue
+		switch record.ResolutionStatus {
+		case vtypes.DiscrepancyStatusPending:
+			if attestation.FeeStatus == vtypes.FeeStatusEscrowed &&
+				attestation.DepositStatus == vtypes.DepositStatusPendingDiscrepancy {
+				continue
+			}
+		case vtypes.DiscrepancyStatusTimedOut:
+			if attestation.FeeStatus == vtypes.FeeStatusReturnedToProvider &&
+				attestation.DepositStatus == vtypes.DepositStatusSlashed {
+				continue
+			}
 		}
 		if !isFinalGenesisFeeStatus(attestation.FeeStatus) ||
 			!isFinalGenesisDepositStatus(attestation.DepositStatus) ||
 			!hasOtherTerminalGenesisDiscrepancy(discrepancies, record.ID, record.Provider, auditor) {
-			return errorsmod.Wrap(moduletypes.ErrInvalidReason, "verification: pending discrepancy attestation funds are inconsistent")
+			return errorsmod.Wrap(moduletypes.ErrInvalidReason, "verification: discrepancy attestation funds are inconsistent")
 		}
 	}
 	return nil
+}
+
+func validateGenesisDiscrepancyResolution(record vtypes.DiscrepancyEvent) error {
+	switch record.ResolutionStatus {
+	case vtypes.DiscrepancyStatusPending:
+		if record.ResolutionReason != vtypes.DiscrepancyResolutionReasonUnspecified ||
+			record.FaultAttribution != vtypes.FaultAttributionUnspecified ||
+			len(record.ResolutionEvidenceHash) != 0 {
+			return errorsmod.Wrap(moduletypes.ErrInvalidReason, "verification: pending discrepancy has resolution data")
+		}
+	case vtypes.DiscrepancyStatusResolved:
+		if err := keeper.ValidateReasonAttribution(record.ResolutionReason, record.FaultAttribution); err != nil {
+			return err
+		}
+		if len(record.ResolutionEvidenceHash) != sha256.Size {
+			return errorsmod.Wrapf(moduletypes.ErrInvalidReason, "verification: resolution evidence hash must be %d bytes", sha256.Size)
+		}
+	case vtypes.DiscrepancyStatusTimedOut:
+		if record.ResolutionReason != vtypes.DiscrepancyResolutionReasonUnspecified ||
+			record.FaultAttribution != vtypes.FaultAttributionInconclusive ||
+			len(record.ResolutionEvidenceHash) != 0 {
+			return errorsmod.Wrap(moduletypes.ErrInvalidReason, "verification: timed-out discrepancy has inconsistent resolution data")
+		}
+	}
+	return nil
+}
+
+func auditorHasPendingGenesisDiscrepancy(records []vtypes.DiscrepancyEvent, auditor string) bool {
+	for _, record := range records {
+		if record.ResolutionStatus == vtypes.DiscrepancyStatusPending &&
+			(record.AuditorA == auditor || record.AuditorB == auditor) {
+			return true
+		}
+	}
+	return false
 }
 
 func findGenesisAuditor(records []vtypes.AuditorRecord, address string) (vtypes.AuditorRecord, bool) {
@@ -718,10 +845,23 @@ func containsID(ids []uint64, target uint64) bool {
 }
 
 func validateNextGenesisID(name string, nextID, maxID uint64) error {
-	if nextID == 0 || nextID <= maxID {
+	if nextID == 0 || nextID <= maxID || nextID == math.MaxUint64 {
 		return errorsmod.Wrapf(moduletypes.ErrInvalidReason, "verification: invalid %s", name)
 	}
 	return nil
+}
+
+func genesisCapabilitiesInclude(actual, requested []vtypes.CapabilityFlag) bool {
+	available := make(map[vtypes.CapabilityFlag]struct{}, len(actual))
+	for _, capability := range actual {
+		available[capability] = struct{}{}
+	}
+	for _, capability := range requested {
+		if _, found := available[capability]; !found {
+			return false
+		}
+	}
+	return true
 }
 
 func isFinalGenesisFeeStatus(status vtypes.FeeStatus) bool {
