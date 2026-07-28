@@ -1,0 +1,172 @@
+package keeper
+
+import (
+	"context"
+	"time"
+
+	"cosmossdk.io/log"
+	"cosmossdk.io/math"
+	storetypes "cosmossdk.io/store/types"
+	"github.com/cosmos/cosmos-sdk/codec"
+	sdk "github.com/cosmos/cosmos-sdk/types"
+	authtypes "github.com/cosmos/cosmos-sdk/x/auth/types"
+
+	vtypes "pkg.akt.dev/go/node/verification/v1"
+
+	moduletypes "pkg.akt.dev/node/v2/x/verification/types"
+)
+
+type Keeper interface {
+	Codec() codec.BinaryCodec
+	StoreKey() storetypes.StoreKey
+	NewQuerier() vtypes.QueryServer
+	GetAuthority() string
+	InitializeModuleAccount(context.Context)
+	EndBlocker(context.Context) error
+	Settle(SettlementInput) (SettlementResult, error)
+	GetParams(sdk.Context) vtypes.Params
+	SetParams(sdk.Context, vtypes.Params)
+	GetAuditor(sdk.Context, sdk.AccAddress) (vtypes.AuditorRecord, bool)
+	SetAuditor(sdk.Context, vtypes.AuditorRecord) error
+	WithAuditors(sdk.Context, func(vtypes.AuditorRecord) bool)
+	GetAttestation(sdk.Context, sdk.AccAddress, sdk.AccAddress) (vtypes.AttestationRecord, bool)
+	SetAttestation(sdk.Context, vtypes.AttestationRecord) error
+	WithAttestations(sdk.Context, func(vtypes.AttestationRecord) bool)
+	WithProviderAttestations(sdk.Context, sdk.AccAddress, vtypes.AttestationStatus, func(vtypes.AttestationRecord) bool)
+	WithAuditorAttestations(sdk.Context, sdk.AccAddress, func(vtypes.AttestationRecord) bool)
+	GetDiscrepancy(sdk.Context, uint64) (vtypes.DiscrepancyEvent, bool)
+	SetDiscrepancy(sdk.Context, vtypes.DiscrepancyEvent)
+	WithDiscrepancies(sdk.Context, vtypes.DiscrepancyStatus, func(vtypes.DiscrepancyEvent) bool)
+	GetProviderBond(sdk.Context, sdk.AccAddress) (vtypes.ProviderBondRecord, bool)
+	SetProviderBond(sdk.Context, vtypes.ProviderBondRecord) error
+	QueueProviderBondUnbonding(sdk.Context, sdk.AccAddress, time.Time) error
+	WithProviderBonds(sdk.Context, func(vtypes.ProviderBondRecord) bool)
+	GetProviderSnapshot(sdk.Context, sdk.AccAddress) (vtypes.ProviderSnapshotRecord, bool)
+	SetProviderSnapshot(sdk.Context, vtypes.ProviderSnapshotRecord) error
+	WithProviderSnapshots(sdk.Context, func(vtypes.ProviderSnapshotRecord) bool)
+	GetAuditEscrow(sdk.Context, uint64) (vtypes.AuditEscrowRecord, bool)
+	SetAuditEscrow(sdk.Context, vtypes.AuditEscrowRecord) error
+	WithAuditEscrows(sdk.Context, func(vtypes.AuditEscrowRecord) bool)
+	WithProviderAuditEscrows(sdk.Context, sdk.AccAddress, vtypes.AuditEscrowStatus, func(vtypes.AuditEscrowRecord) bool)
+	GetProviderVerificationGrace(sdk.Context, sdk.AccAddress) (vtypes.ProviderVerificationGraceRecord, bool)
+	SetProviderVerificationGrace(sdk.Context, vtypes.ProviderVerificationGraceRecord) error
+	WithVerificationGraces(sdk.Context, func(vtypes.ProviderVerificationGraceRecord) bool)
+	IsVerificationActive(sdk.Context) bool
+	GetProviderValidAttestations(sdk.Context, sdk.Address) ([]vtypes.AttestationRecord, bool)
+	IsProviderSnapshotCompliant(sdk.Context, sdk.Address) bool
+	GetProviderBestTier(sdk.Context, sdk.Address) vtypes.VerificationTier
+	GetProviderGraceTier(sdk.Context, sdk.Address) (vtypes.VerificationTier, bool)
+	ProviderHasCapability(sdk.Context, sdk.Address, vtypes.CapabilityFlag) bool
+	CountQualifiedAuditors(sdk.Context, sdk.Address, vtypes.VerificationTier) uint32
+	ModuleBalance(sdk.Context, string) sdk.Coin
+	GetNextDiscrepancyID(sdk.Context) uint64
+	SetNextDiscrepancyID(sdk.Context, uint64)
+	NextDiscrepancyID(sdk.Context) uint64
+	GetNextAuditEscrowID(sdk.Context) uint64
+	SetNextAuditEscrowID(sdk.Context, uint64)
+	NextAuditEscrowID(sdk.Context) uint64
+	GetNextGraceRecordID(sdk.Context) uint64
+	SetNextGraceRecordID(sdk.Context, uint64)
+	NextGraceRecordID(sdk.Context) uint64
+	RegisterAuditor(sdk.Context, string, sdk.AccAddress, vtypes.VerificationTier, []byte) error
+	PostAuditorBond(sdk.Context, sdk.AccAddress, sdk.Coin) error
+	RenewAuditor(sdk.Context, string, sdk.AccAddress) error
+	RemoveAuditor(sdk.Context, string, sdk.AccAddress) error
+	ResignAuditor(sdk.Context, sdk.AccAddress) error
+	PostProviderBond(sdk.Context, sdk.AccAddress, sdk.Coin) error
+	WithdrawProviderBond(sdk.Context, sdk.AccAddress, sdk.Coin) error
+	SlashProviderBond(sdk.Context, string, sdk.AccAddress, math.LegacyDec, vtypes.ProviderBondSlashReason, []byte) error
+	PostSnapshotHash(sdk.Context, sdk.AccAddress, []byte, vtypes.ResourceSummary, time.Time) error
+	OpenAuditEscrow(sdk.Context, sdk.AccAddress, vtypes.VerificationTier, []vtypes.CapabilityFlag, sdk.Coin, sdk.Coin, time.Time, []byte) (uint64, error)
+	CancelAuditEscrow(sdk.Context, sdk.AccAddress, uint64) error
+	SettleAuditEscrow(sdk.Context, string, uint64, vtypes.AuditEscrowSettlementReason, vtypes.FaultAttribution, []byte) error
+	SubmitAttestation(sdk.Context, sdk.AccAddress, sdk.AccAddress, vtypes.VerificationTier, []vtypes.CapabilityFlag, []byte, sdk.Coin, sdk.Coin, uint64) error
+	RevokeAttestation(sdk.Context, sdk.AccAddress, sdk.AccAddress, vtypes.AttestationRevocationReason, []byte) error
+	RemoveAttestation(sdk.Context, sdk.AccAddress, sdk.AccAddress) error
+	RevokeProviderAttestation(sdk.Context, string, sdk.AccAddress, sdk.AccAddress, vtypes.GovernanceAttestationReason, vtypes.FaultAttribution, []byte) error
+	RevokeAllProviderAttestations(sdk.Context, string, sdk.AccAddress, vtypes.GovernanceAttestationReason, vtypes.FaultAttribution, []byte) error
+	RevokeAuditorAttestations(sdk.Context, string, sdk.AccAddress, vtypes.GovernanceAttestationReason, vtypes.FaultAttribution, []byte) error
+	ResolveDiscrepancy(sdk.Context, string, uint64, string, bool, bool, vtypes.DiscrepancyResolutionReason, vtypes.FaultAttribution, []byte) error
+}
+
+type keeper struct {
+	cdc          codec.BinaryCodec
+	skey         storetypes.StoreKey
+	authority    string
+	account      AccountKeeper
+	bank         BankKeeper
+	distribution DistributionKeeper
+	provider     ProviderKeeper
+	market       MarketStatsKeeper
+}
+
+func NewKeeper(cdc codec.BinaryCodec, skey storetypes.StoreKey, dependencies Dependencies, opts ...Option) Keeper {
+	k := &keeper{
+		cdc:          cdc,
+		skey:         skey,
+		authority:    dependencies.Authority,
+		account:      dependencies.Account,
+		bank:         dependencies.Bank,
+		distribution: dependencies.Distribution,
+		provider:     dependencies.Provider,
+		market:       dependencies.Market,
+	}
+	for _, opt := range opts {
+		opt(k)
+	}
+	k.assertDependencies()
+	return k
+}
+
+func (k *keeper) assertDependencies() {
+	switch {
+	case k.authority == "":
+		panic("verification: authority is required")
+	case k.account == nil:
+		panic("verification: account keeper is required")
+	case k.bank == nil:
+		panic("verification: bank keeper is required")
+	case k.distribution == nil:
+		panic("verification: distribution keeper is required")
+	case k.provider == nil:
+		panic("verification: provider keeper is required")
+	case k.market == nil:
+		panic("verification: market stats keeper is required")
+	}
+}
+
+func (k *keeper) Codec() codec.BinaryCodec {
+	return k.cdc
+}
+
+func (k *keeper) StoreKey() storetypes.StoreKey {
+	return k.skey
+}
+
+func (k *keeper) Logger(sctx sdk.Context) log.Logger {
+	return sctx.Logger().With("module", "x/"+moduletypes.ModuleName)
+}
+
+func (k *keeper) NewQuerier() vtypes.QueryServer {
+	return &Querier{Keeper: k}
+}
+
+func (k *keeper) ModuleBalance(ctx sdk.Context, denom string) sdk.Coin {
+	return k.bank.GetBalance(ctx, authtypes.NewModuleAddress(moduletypes.ModuleName), denom)
+}
+
+func (k *keeper) GetAuthority() string {
+	return k.authority
+}
+
+func (k *keeper) InitializeModuleAccount(ctx context.Context) {
+	account := k.account.GetModuleAccount(ctx, moduletypes.ModuleName)
+	if account == nil {
+		account = authtypes.NewEmptyModuleAccount(moduletypes.ModuleName)
+	}
+	k.account.SetModuleAccount(ctx, account)
+}
+
+func (k *keeper) Settle(input SettlementInput) (SettlementResult, error) {
+	return Settle(input)
+}
