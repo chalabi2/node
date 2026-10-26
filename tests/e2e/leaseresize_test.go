@@ -16,15 +16,14 @@ import (
 	"github.com/stretchr/testify/require"
 
 	dv1 "pkg.akt.dev/go/node/deployment/v1"
-	dvbeta "pkg.akt.dev/go/node/deployment/v1beta5"
+	dvbeta "pkg.akt.dev/go/node/deployment/v1beta4"
 	ev1 "pkg.akt.dev/go/node/escrow/v1"
 	mv1 "pkg.akt.dev/go/node/market/v1"
-	mvbeta "pkg.akt.dev/go/node/market/v2beta1"
+	mvbeta "pkg.akt.dev/go/node/market/v1beta5"
 	rtypes "pkg.akt.dev/go/node/types/resources/v1beta4"
 	"pkg.akt.dev/go/node/types/unit"
 	"pkg.akt.dev/go/sdkutil"
-
-	testutil "pkg.akt.dev/node/v2/testutil/fixtures"
+	"pkg.akt.dev/go/testutil"
 )
 
 func (s *smSuite) enableLeaseResize() {

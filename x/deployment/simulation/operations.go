@@ -15,7 +15,7 @@ import (
 	"github.com/cosmos/cosmos-sdk/x/simulation"
 
 	"pkg.akt.dev/go/node/deployment/v1"
-	dvbeta "pkg.akt.dev/go/node/deployment/v1beta5"
+	dvbeta "pkg.akt.dev/go/node/deployment/v1beta4"
 	deposit "pkg.akt.dev/go/node/types/deposit/v1"
 	"pkg.akt.dev/go/sdkutil"
 	sdlv1 "pkg.akt.dev/go/sdl"
@@ -148,23 +148,7 @@ func SimulateMsgCreateDeployment(ak govtypes.AccountKeeper, bk bankkeeper.Keeper
 			Sources: deposit.Sources{deposit.SourceBalance},
 		})
 
-		// Transitional lossless re-encode: deployment/v1beta5 is a
-		// wire-compatible superset of the GroupSpec version returned by
-		// go/sdl, so the roundtrip preserves every field. Collapse this back
-		// to a direct append once go/sdl returns v1beta5 groups natively.
-		for i := range groupSpecs {
-			data, merr := groupSpecs[i].Marshal()
-			if merr != nil {
-				return simtypes.NoOpMsg(v1.ModuleName, msg.Type(), "unable to marshal group spec"), nil, merr
-			}
-
-			var gspec dvbeta.GroupSpec
-			if merr = gspec.Unmarshal(data); merr != nil {
-				return simtypes.NoOpMsg(v1.ModuleName, msg.Type(), "unable to unmarshal group spec"), nil, merr
-			}
-
-			msg.Groups = append(msg.Groups, gspec)
-		}
+		msg.Groups = append(msg.Groups, groupSpecs...)
 
 		txGen := sdkutil.MakeEncodingConfig().TxConfig
 		tx, err := simtestutil.GenSignedMockTx(

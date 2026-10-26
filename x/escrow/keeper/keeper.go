@@ -15,13 +15,13 @@ import (
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/cosmos/cosmos-sdk/x/authz"
 
-	dvbeta "pkg.akt.dev/go/node/deployment/v1beta5"
+	dvbeta "pkg.akt.dev/go/node/deployment/v1beta4"
 	escrowid "pkg.akt.dev/go/node/escrow/id/v1"
 	"pkg.akt.dev/go/node/escrow/module"
 	etypes "pkg.akt.dev/go/node/escrow/types/v1"
 	ev1 "pkg.akt.dev/go/node/escrow/v1"
 	mv1 "pkg.akt.dev/go/node/market/v1"
-	mtypes "pkg.akt.dev/go/node/market/v2beta1"
+	mtypes "pkg.akt.dev/go/node/market/v1beta5"
 	deposit "pkg.akt.dev/go/node/types/deposit/v1"
 
 	bmetypes "pkg.akt.dev/go/node/bme/v1"
@@ -260,31 +260,25 @@ func (k *keeper) AuthorizeDeposits(sctx sdk.Context, msg sdk.Msg) ([]etypes.Depo
 								Sources: mt.Deposit.Sources,
 							},
 						}
-					// The staged-version create messages are translated to the
-					// version-stable MsgAccountDeposit shape: the authorization
-					// reads only the deposit scope and amount, and the scope
-					// rides the escrow account ID. This keeps grant acceptance
-					// working across module version migrations — the sdk-side
-					// DepositAuthorization type switch predates
-					// deployment/v1beta5 and market/v2beta1 and does not
-					// recognize their create messages.
 					case *dvbeta.MsgCreateDeployment:
-						authzMsg = &ev1.MsgAccountDeposit{
-							Signer: mt.ID.Owner,
-							ID:     mt.ID.ToEscrowAccountID(),
+						authzMsg = &dvbeta.MsgCreateDeployment{
+							ID:     mt.ID,
+							Groups: mt.Groups,
+							Hash:   mt.Hash,
 							Deposit: deposit.Deposit{
 								Amount:  requestedSpend,
 								Sources: dep.Sources,
 							},
 						}
 					case *mtypes.MsgCreateBid:
-						authzMsg = &ev1.MsgAccountDeposit{
-							Signer: mt.ID.Provider,
-							ID:     mt.ID.ToEscrowAccountID(),
+						authzMsg = &mtypes.MsgCreateBid{
+							ID:    mt.ID,
+							Price: mt.Price,
 							Deposit: deposit.Deposit{
 								Amount:  requestedSpend,
 								Sources: dep.Sources,
 							},
+							ResourcesOffer: mt.ResourcesOffer,
 						}
 					}
 

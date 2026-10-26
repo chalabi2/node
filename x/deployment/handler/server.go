@@ -10,7 +10,7 @@ import (
 	"pkg.akt.dev/go/sdkutil"
 
 	v1 "pkg.akt.dev/go/node/deployment/v1"
-	types "pkg.akt.dev/go/node/deployment/v1beta5"
+	types "pkg.akt.dev/go/node/deployment/v1beta4"
 	mv1 "pkg.akt.dev/go/node/market/v1"
 
 	dimports "pkg.akt.dev/node/v2/x/deployment/imports"

@@ -11,11 +11,11 @@ import (
 	sdk "github.com/cosmos/cosmos-sdk/types"
 
 	dv1 "pkg.akt.dev/go/node/deployment/v1"
-	dtypes "pkg.akt.dev/go/node/deployment/v1beta5"
+	dtypes "pkg.akt.dev/go/node/deployment/v1beta4"
 	mv1 "pkg.akt.dev/go/node/market/v1"
-	mvbeta "pkg.akt.dev/go/node/market/v2beta1"
+	mvbeta "pkg.akt.dev/go/node/market/v1beta5"
 	deposit "pkg.akt.dev/go/node/types/deposit/v1"
-	testutil "pkg.akt.dev/node/v2/testutil/fixtures"
+	"pkg.akt.dev/go/testutil"
 
 	"pkg.akt.dev/node/v2/testutil/state"
 	bmemodule "pkg.akt.dev/node/v2/x/bme"

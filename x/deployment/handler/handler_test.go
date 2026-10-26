@@ -20,13 +20,13 @@ import (
 	distrtypes "github.com/cosmos/cosmos-sdk/x/distribution/types"
 
 	"pkg.akt.dev/go/node/deployment/v1"
-	dvbeta "pkg.akt.dev/go/node/deployment/v1beta5"
+	dvbeta "pkg.akt.dev/go/node/deployment/v1beta4"
 	emodule "pkg.akt.dev/go/node/escrow/module"
 	ev1 "pkg.akt.dev/go/node/escrow/v1"
 	mv1 "pkg.akt.dev/go/node/market/v1"
 	deposit "pkg.akt.dev/go/node/types/deposit/v1"
 	"pkg.akt.dev/go/sdkutil"
-	testutil "pkg.akt.dev/node/v2/testutil/fixtures"
+	"pkg.akt.dev/go/testutil"
 
 	cmocks "pkg.akt.dev/node/v2/testutil/cosmos/mocks"
 	"pkg.akt.dev/node/v2/testutil/state"

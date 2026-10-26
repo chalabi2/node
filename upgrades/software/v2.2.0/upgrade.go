@@ -12,8 +12,8 @@ import (
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/cosmos/cosmos-sdk/types/module"
 
-	dvbeta "pkg.akt.dev/go/node/deployment/v1beta5"
-	mvbeta "pkg.akt.dev/go/node/market/v2beta1"
+	dvbeta "pkg.akt.dev/go/node/deployment/v1beta4"
+	mvbeta "pkg.akt.dev/go/node/market/v1beta5"
 
 	apptypes "pkg.akt.dev/node/v2/app/types"
 	utypes "pkg.akt.dev/node/v2/upgrades/types"
@@ -57,7 +57,7 @@ func (up *upgrade) UpgradeHandler() upgradetypes.UpgradeHandler {
 			return toVM, err
 		}
 
-		// Seed the AEP-87 deployment volume params. The migrated params
+		// Seed the AEP-87 deployment volume params. The stored params
 		// decode with the volume fields zero; MaxVolumeSize == 0 marks
 		// them unseeded (Params.Validate rejects it).
 		dparams, err := up.Keepers.Akash.Deployment.GetParams(sctx)

@@ -7,8 +7,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	types "pkg.akt.dev/go/node/deployment/v1"
-	dvbeta "pkg.akt.dev/go/node/deployment/v1beta5"
-	testutil "pkg.akt.dev/node/v2/testutil/fixtures"
+	dvbeta "pkg.akt.dev/go/node/deployment/v1beta4"
+	"pkg.akt.dev/go/testutil"
 
 	"pkg.akt.dev/node/v2/x/deployment/keeper"
 	"pkg.akt.dev/node/v2/x/deployment/keeper/keys"

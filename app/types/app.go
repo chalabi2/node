@@ -69,7 +69,7 @@ import (
 	epochstypes "pkg.akt.dev/go/node/epochs/v1beta1"
 	etypes "pkg.akt.dev/go/node/escrow/module"
 	mtypes "pkg.akt.dev/go/node/market/v1"
-	mvbeta "pkg.akt.dev/go/node/market/v2beta1"
+	mvbeta "pkg.akt.dev/go/node/market/v1beta5"
 	otypes "pkg.akt.dev/go/node/oracle/v2"
 	ptypes "pkg.akt.dev/go/node/provider/v1beta4"
 	wtypes "pkg.akt.dev/go/node/wasm/v1"

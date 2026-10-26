@@ -4,9 +4,9 @@ import (
 	sdk "github.com/cosmos/cosmos-sdk/types"
 
 	dv1 "pkg.akt.dev/go/node/deployment/v1"
-	dtypes "pkg.akt.dev/go/node/deployment/v1beta5"
+	dtypes "pkg.akt.dev/go/node/deployment/v1beta4"
 	mv1 "pkg.akt.dev/go/node/market/v1"
-	mtypes "pkg.akt.dev/go/node/market/v2beta1"
+	mtypes "pkg.akt.dev/go/node/market/v1beta5"
 )
 
 type DeploymentKeeper interface {

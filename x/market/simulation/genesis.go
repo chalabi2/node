@@ -3,9 +3,9 @@ package simulation
 import (
 	"github.com/cosmos/cosmos-sdk/types/module"
 
-	dtypes "pkg.akt.dev/go/node/deployment/v1beta5"
+	dtypes "pkg.akt.dev/go/node/deployment/v1beta4"
 	mv1 "pkg.akt.dev/go/node/market/v1"
-	mvbeta "pkg.akt.dev/go/node/market/v2beta1"
+	mvbeta "pkg.akt.dev/go/node/market/v1beta5"
 )
 
 var minDeposit, _ = dtypes.DefaultParams().MinDepositFor("uakt")

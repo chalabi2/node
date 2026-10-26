@@ -9,7 +9,7 @@ import (
 
 	dtypes "pkg.akt.dev/go/node/deployment/v1"
 	mv1 "pkg.akt.dev/go/node/market/v1"
-	types "pkg.akt.dev/go/node/market/v2beta1"
+	types "pkg.akt.dev/go/node/market/v1beta5"
 
 	"pkg.akt.dev/node/v2/x/market/keeper/keys"
 )
