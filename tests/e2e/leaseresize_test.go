@@ -37,10 +37,10 @@ func (s *smSuite) enableLeaseResize() {
 }
 
 // computeLease leases a 1uact/block compute deployment to the provider.
-func (s *smSuite) computeLease(owner string, provider sdk.AccAddress, refs ...dv1.VolumeRef) (mv1.LeaseID, mvbeta.Order) {
+func (s *smSuite) computeLease(owner string, provider sdk.AccAddress) (mv1.LeaseID, mvbeta.Order) {
 	s.t.Helper()
 
-	order, _ := s.createComputeDeployment(owner, s.defaultDeposit(), refs...)
+	order, _ := s.createComputeDeployment(owner, s.defaultDeposit())
 	lid := s.bidAndLease(order, provider, nil)
 
 	return lid, order
