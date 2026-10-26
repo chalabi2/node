@@ -55,6 +55,7 @@ var (
 	ParamsPrefix                      = []byte{0x14, 0x00}
 	AttachmentsPrefix                 = []byte{0x15, 0x00}
 	AttachmentsRevPrefix              = []byte{0x16, 0x00}
+	LeaseResizePrefix                 = []byte{0x17, 0x00}
 )
 
 func OrderKey(statePrefix []byte, id mv1.OrderID) ([]byte, error) {

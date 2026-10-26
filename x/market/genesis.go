@@ -20,6 +20,19 @@ func ValidateGenesis(data *mvbeta.GenesisState) error {
 		return err
 	}
 
+	deployments := make(map[string]struct{}, len(data.LeaseResizes))
+	for _, resize := range data.LeaseResizes {
+		if err := resize.LeaseID.Validate(); err != nil {
+			return fmt.Errorf("market genesis lease resize %s: %w", resize.LeaseID, err)
+		}
+
+		did := resize.LeaseID.DeploymentID().String()
+		if _, dup := deployments[did]; dup {
+			return fmt.Errorf("market genesis lease resize %s: %w", resize.LeaseID, mv1.ErrLeaseResizePending)
+		}
+		deployments[did] = struct{}{}
+	}
+
 	return nil
 }
 
@@ -78,6 +91,12 @@ func InitGenesis(ctx sdk.Context, kpr keeper.IKeeper, data *mvbeta.GenesisState)
 		}
 	}
 
+	for _, record := range data.LeaseResizes {
+		if err := kpr.SetLeaseResize(ctx, record); err != nil {
+			panic(fmt.Errorf("market genesis lease resizes init. lease id %s: %w", record.LeaseID, err))
+		}
+	}
+
 	// The AEP-87 volume attachment indexes are a pure function of the live
 	// leases and their orders' group specs; rebuild them instead of carrying
 	// them in the genesis document.
@@ -117,11 +136,18 @@ func ExportGenesis(ctx sdk.Context, k keeper.IKeeper) *mvbeta.GenesisState {
 		return false
 	})
 
+	var resizes []mvbeta.LeaseResize
+	k.WithLeaseResizes(ctx, func(resize mvbeta.LeaseResize) bool {
+		resizes = append(resizes, resize)
+		return false
+	})
+
 	return &mvbeta.GenesisState{
-		Params: params,
-		Orders: orders,
-		Leases: leases,
-		Bids:   bids,
+		Params:       params,
+		Orders:       orders,
+		Leases:       leases,
+		Bids:         bids,
+		LeaseResizes: resizes,
 	}
 }
 

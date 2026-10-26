@@ -419,6 +419,10 @@ func (ms msgServer) LeaseStartReclaim(goCtx context.Context, msg *mvbeta.MsgLeas
 		return nil, err
 	}
 
+	if err := ms.keepers.Market.CancelLeaseResize(ctx, lease.ID, mv1.LeaseResizeCancelReasonLeaseClosed); err != nil {
+		return nil, err
+	}
+
 	if err := ctx.EventManager().EmitTypedEvent(&mv1.EventLeaseReclaimStarted{
 		ID:       lease.ID,
 		Reason:   msg.Reason,

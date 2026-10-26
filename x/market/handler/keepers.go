@@ -26,6 +26,7 @@ type EscrowKeeper interface {
 	PaymentCreate(ctx sdk.Context, id escrowid.Payment, provider sdk.AccAddress, rate sdk.DecCoin) error
 	PaymentWithdraw(ctx sdk.Context, id escrowid.Payment) error
 	PaymentClose(ctx sdk.Context, id escrowid.Payment) error
+	PaymentUpdateRate(ctx sdk.Context, id escrowid.Payment, rate sdk.DecCoin) error
 	AuthorizeDeposits(sctx sdk.Context, msg sdk.Msg) ([]etypes.Depositor, error)
 }
 
@@ -44,6 +45,10 @@ type DeploymentKeeper interface {
 	GetGroup(ctx sdk.Context, id dtypes.GroupID) (dbeta.Group, bool)
 	OnBidClosed(ctx sdk.Context, id dtypes.GroupID) error
 	OnLeaseClosed(ctx sdk.Context, id dtypes.GroupID) (dbeta.Group, error)
+	GetDeployment(ctx sdk.Context, id dtypes.DeploymentID) (dtypes.Deployment, bool)
+	UpdateDeployment(ctx sdk.Context, deployment dtypes.Deployment) error
+	SaveGroup(ctx sdk.Context, group dbeta.Group) error
+	GetParams(ctx sdk.Context) (dbeta.Params, error)
 }
 
 type AuthzKeeper interface {

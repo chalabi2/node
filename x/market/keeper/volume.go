@@ -383,6 +383,10 @@ func (k Keeper) ReclaimVolumeOnClose(ctx sdk.Context, id dtypes.GroupID, reason 
 		return false, err
 	}
 
+	if err := k.CancelLeaseResize(ctx, lease.ID, mv1.LeaseResizeCancelReasonLeaseClosed); err != nil {
+		return false, err
+	}
+
 	err = ctx.EventManager().EmitTypedEvent(&mv1.EventLeaseReclaimStarted{
 		ID:       lease.ID,
 		Reason:   reason,

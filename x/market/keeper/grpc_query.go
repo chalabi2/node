@@ -1159,6 +1159,37 @@ func (k Querier) Lease(c context.Context, req *types.QueryLeaseRequest) (*types.
 	}, nil
 }
 
+// LeaseResizes lists pending lease resizes, optionally for one tenant or one
+// provider.
+func (k Querier) LeaseResizes(ctx context.Context, req *types.QueryLeaseResizesRequest) (*types.QueryLeaseResizesResponse, error) {
+	if req == nil {
+		return nil, status.Errorf(codes.InvalidArgument, "empty request")
+	}
+
+	var opts []func(*sdkquery.CollectionsPaginateOptions[keys.DeploymentPartKey])
+	if req.Owner != "" {
+		opts = append(opts, sdkquery.WithCollectionPaginationPairPrefix[string, uint64](req.Owner))
+	}
+
+	resizes, pageRes, err := sdkquery.CollectionFilteredPaginate(ctx, k.leaseResizes, req.Pagination,
+		func(_ keys.DeploymentPartKey, resize types.LeaseResize) (bool, error) {
+			return req.Provider == "" || resize.LeaseID.Provider == req.Provider, nil
+		},
+		func(_ keys.DeploymentPartKey, resize types.LeaseResize) (types.LeaseResize, error) {
+			return resize, nil
+		},
+		opts...,
+	)
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+
+	return &types.QueryLeaseResizesResponse{
+		LeaseResizes: resizes,
+		Pagination:   pageRes,
+	}, nil
+}
+
 func (k Querier) Params(ctx context.Context, req *types.QueryParamsRequest) (*types.QueryParamsResponse, error) {
 	if req == nil {
 		return nil, status.Errorf(codes.InvalidArgument, "empty request")

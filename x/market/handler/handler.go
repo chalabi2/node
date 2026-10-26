@@ -32,6 +32,18 @@ func NewHandler(keepers Keepers) baseapp.MsgServiceHandler {
 		case *mvbeta.MsgLeaseStartReclaim:
 			res, err := ms.LeaseStartReclaim(ctx, msg)
 			return sdk.WrapServiceResult(ctx, res, err)
+		case *mvbeta.MsgResizeLease:
+			res, err := ms.ResizeLease(ctx, msg)
+			return sdk.WrapServiceResult(ctx, res, err)
+		case *mvbeta.MsgAcceptLeaseResize:
+			res, err := ms.AcceptLeaseResize(ctx, msg)
+			return sdk.WrapServiceResult(ctx, res, err)
+		case *mvbeta.MsgRejectLeaseResize:
+			res, err := ms.RejectLeaseResize(ctx, msg)
+			return sdk.WrapServiceResult(ctx, res, err)
+		case *mvbeta.MsgCancelLeaseResize:
+			res, err := ms.CancelLeaseResize(ctx, msg)
+			return sdk.WrapServiceResult(ctx, res, err)
 		default:
 			return nil, sdkerrors.ErrUnknownRequest
 		}

@@ -43,6 +43,7 @@ Ref: https://keepachangelog.com/en/1.0.0/
 ### Features
 
 * (x/escrow) AEP-87: EventAccountRunway emitted at the end of every account settle with open payments: projected depletion height = current + floor(funds / sum of open payment rates), 0 when funds cover no full block. Additive typed event, no state change.
+* (x/market) In-place lease resize: MsgResizeLease (tenant) records a pending request with the group's new resource units and manifest hash; the lease's provider applies it with MsgAcceptLeaseResize at a price within the request's ceiling or declines with MsgRejectLeaseResize, and the tenant can withdraw it with MsgCancelLeaseResize. Query/LeaseResizes lists pending requests. Ships off behind Params.LeaseResizeEnabled.
 
 ### State Machine Breaking
 
@@ -53,6 +54,7 @@ Ref: https://keepachangelog.com/en/1.0.0/
 * (x/market) AEP-87: Lease.ClosedAt (block time, unix seconds) written on every lease close path; LastVolumeLeaseClosedAt anchors the vid retention gate and adoption validation on the dead volume's most recent closed lease. Leases closed before v2.2.0 carry closed_at=0 and report no anchor (expired semantics), so the upgrade needs no backfill.
 * (x/market) AEP-87: volume attachment indexes (0x15/0x16) maintained in the keeper create/close routines; cascade-detach with reason substitution on every volume lease close path; rebuilt deterministically on genesis import.
 * (x/market) AEP-87: CreateBid volume gates (reclamation floor, storage-quantity equality, adoption-provider gate, colocation contract for attaching groups), CreateLease re-verification, tenant volume closes routed through the reclamation window, and the migrate/evict auto-re-order carve-out.
+* (x/market) Lease resize state: pending requests (at most one per deployment, they carry a deployment-wide manifest hash) under prefix 0x17, exported in genesis. Accepting rewrites the group spec, the active order spec, the lease and active bid price and, when the request has one, the deployment hash, in one message. Closing or reclaiming a lease drops its pending resize with EventLeaseResizeCanceled.
 * (x/escrow) PaymentUpdateRate settles the account at the old rate before switching an open payment to a new one, so no unsettled block is re-priced, and re-emits EventAccountRunway at the new rates.
 * (upgrades) AEP-87: v2.2.0 upgrade handler. ConsensusVersion bumps: deployment 8 -> 9 (groups store re-encoded deployment/v1beta4 -> v1beta5) and market 9 -> 10 (orders/bids stores re-encoded market/v1beta5 -> v2beta1); both re-encodes are byte-identical (nullable-additive). Seeds the AEP-87 params (VolumeOrdersEnabled=false, MinVolumeReclamationWindow=24h, MaxVolumeSize=32Ti, MaxVolumeRetention=720h, MaxVolumeReplicas=4) and initializes the empty volume/attachment indexes (0x13/0x15/0x16). No store keys added or removed.
 
