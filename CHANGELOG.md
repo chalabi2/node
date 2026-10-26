@@ -43,7 +43,7 @@ Ref: https://keepachangelog.com/en/1.0.0/
 ### Features
 
 * (x/escrow) AEP-87: EventAccountRunway emitted at the end of every account settle with open payments: projected depletion height = current + floor(funds / sum of open payment rates), 0 when funds cover no full block. Additive typed event, no state change.
-* (x/market) In-place lease resize: MsgResizeLease (tenant) records a pending request with the group's new resource units and manifest hash; the lease's provider applies it with MsgAcceptLeaseResize at a price within the request's ceiling or declines with MsgRejectLeaseResize, and the tenant can withdraw it with MsgCancelLeaseResize. Query/LeaseResizes lists pending requests. Ships off behind Params.LeaseResizeEnabled.
+* (x/market) In-place lease resize: MsgResizeLease (tenant) records a pending request with the group's new resource units and manifest hash; the lease's provider applies it with MsgAcceptLeaseResize at a price within the request's ceiling or declines with MsgRejectLeaseResize, and the tenant can withdraw it with MsgCancelLeaseResize. Query/LeaseResizes lists pending requests, for a tenant, a provider or, with owner and dseq, one deployment. Ships off behind Params.LeaseResizeEnabled.
 
 ### State Machine Breaking
 

@@ -1240,3 +1240,46 @@ func TestGRPCQueryLeases(t *testing.T) {
 		})
 	}
 }
+
+func TestGRPCQueryLeaseResizesByDeployment(t *testing.T) {
+	suite := setupTest(t)
+
+	owner := testutil.AccAddress(t).String()
+	other := testutil.AccAddress(t).String()
+	provider := testutil.AccAddress(t).String()
+
+	resize := func(owner string, dseq uint64) mvbeta.LeaseResize {
+		return mvbeta.LeaseResize{
+			LeaseID: mv1.LeaseID{Owner: owner, DSeq: dseq, GSeq: 1, OSeq: 1, Provider: provider},
+			Digest:  []byte(owner),
+		}
+	}
+
+	for _, r := range []mvbeta.LeaseResize{resize(owner, 1), resize(owner, 2), resize(other, 2)} {
+		require.NoError(t, suite.keeper.SetLeaseResize(suite.ctx, r))
+	}
+
+	res, err := suite.queryClient.LeaseResizes(suite.ctx, &mvbeta.QueryLeaseResizesRequest{Owner: owner, DSeq: 2})
+	require.NoError(t, err)
+	require.Len(t, res.LeaseResizes, 1)
+	require.Equal(t, resize(owner, 2).LeaseID, res.LeaseResizes[0].LeaseID)
+
+	// a deployment without a pending resize
+	res, err = suite.queryClient.LeaseResizes(suite.ctx, &mvbeta.QueryLeaseResizesRequest{Owner: owner, DSeq: 3})
+	require.NoError(t, err)
+	require.Empty(t, res.LeaseResizes)
+
+	// the provider filter still applies
+	res, err = suite.queryClient.LeaseResizes(suite.ctx, &mvbeta.QueryLeaseResizesRequest{Owner: owner, DSeq: 2, Provider: other})
+	require.NoError(t, err)
+	require.Empty(t, res.LeaseResizes)
+
+	// a dseq names a deployment only together with its owner
+	_, err = suite.queryClient.LeaseResizes(suite.ctx, &mvbeta.QueryLeaseResizesRequest{DSeq: 2})
+	require.Error(t, err)
+
+	// without a dseq the owner filter lists all of the owner's resizes
+	res, err = suite.queryClient.LeaseResizes(suite.ctx, &mvbeta.QueryLeaseResizesRequest{Owner: owner})
+	require.NoError(t, err)
+	require.Len(t, res.LeaseResizes, 2)
+}

@@ -13,6 +13,7 @@ import (
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	sdkquery "github.com/cosmos/cosmos-sdk/types/query"
 
+	dv1 "pkg.akt.dev/go/node/deployment/v1"
 	v1 "pkg.akt.dev/go/node/market/v1"
 	types "pkg.akt.dev/go/node/market/v1beta5"
 
@@ -1159,11 +1160,15 @@ func (k Querier) Lease(c context.Context, req *types.QueryLeaseRequest) (*types.
 	}, nil
 }
 
-// LeaseResizes lists pending lease resizes, optionally for one tenant or one
-// provider.
+// LeaseResizes lists pending lease resizes, optionally for one tenant, one
+// deployment of a tenant, or one provider.
 func (k Querier) LeaseResizes(ctx context.Context, req *types.QueryLeaseResizesRequest) (*types.QueryLeaseResizesResponse, error) {
 	if req == nil {
 		return nil, status.Errorf(codes.InvalidArgument, "empty request")
+	}
+
+	if req.DSeq != 0 {
+		return k.deploymentLeaseResize(ctx, req)
 	}
 
 	var opts []func(*sdkquery.CollectionsPaginateOptions[keys.DeploymentPartKey])
@@ -1187,6 +1192,31 @@ func (k Querier) LeaseResizes(ctx context.Context, req *types.QueryLeaseResizesR
 	return &types.QueryLeaseResizesResponse{
 		LeaseResizes: resizes,
 		Pagination:   pageRes,
+	}, nil
+}
+
+// deploymentLeaseResize answers a LeaseResizes request for one deployment,
+// which has at most one pending resize, with a single read.
+func (k Querier) deploymentLeaseResize(ctx context.Context, req *types.QueryLeaseResizesRequest) (*types.QueryLeaseResizesResponse, error) {
+	if req.Owner == "" {
+		return nil, status.Error(codes.InvalidArgument, "dseq requires owner")
+	}
+
+	resizes := make([]types.LeaseResize, 0, 1)
+
+	resize, err := k.leaseResizes.Get(ctx, keys.DeploymentIDToPartKey(dv1.DeploymentID{Owner: req.Owner, DSeq: req.DSeq}))
+	switch {
+	case err == nil:
+		if req.Provider == "" || resize.LeaseID.Provider == req.Provider {
+			resizes = append(resizes, resize)
+		}
+	case !errors.Is(err, collections.ErrNotFound):
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+
+	return &types.QueryLeaseResizesResponse{
+		LeaseResizes: resizes,
+		Pagination:   &sdkquery.PageResponse{Total: uint64(len(resizes))},
 	}, nil
 }
 
