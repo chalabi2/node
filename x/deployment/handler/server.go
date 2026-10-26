@@ -395,6 +395,11 @@ func (ms msgServer) validateVolumeCreate(ctx sdk.Context, msg *types.MsgCreateDe
 		if name := volumeStorageName(target); name != adopt.Name {
 			return v1.ErrInvalidVolumeAdoption.Wrapf("volume name mismatch: %q != %q", adopt.Name, name)
 		}
+		// a lease resize may have grown the volume, and its data does not
+		// fit a smaller one
+		if size, held := volumeSize(gspec), volumeSize(target.GroupSpec); size < held {
+			return v1.ErrInvalidVolumeAdoption.Wrapf("size %d is below the adopted volume's %d", size, held)
+		}
 		closedAt, ok := ms.market.LastVolumeLeaseClosedAt(ctx, adopt.GroupID())
 		if !ok {
 			return v1.ErrInvalidVolumeAdoption.Wrapf("volume group %s has no closed lease to adopt from", adopt.GroupID())
@@ -424,6 +429,9 @@ func (ms msgServer) validateVolumeCreate(ctx sdk.Context, msg *types.MsgCreateDe
 		if name := volumeStorageName(target); name != rep.Name {
 			return v1.ErrInvalidVolumeReplica.Wrapf("volume name mismatch: %q != %q", rep.Name, name)
 		}
+		if size, src := volumeSize(gspec), volumeSize(target.GroupSpec); size < src {
+			return v1.ErrInvalidVolumeReplica.Wrapf("size %d is below the source volume's %d", size, src)
+		}
 		if count := ms.deployment.GetVolumeReplicaCount(ctx, rep.GroupID()); count >= uint64(tvol.MaxReplicas) {
 			return v1.ErrInvalidVolumeReplica.Wrapf("volume group %s max_replicas (%d) reached", rep.GroupID(), tvol.MaxReplicas)
 		}
@@ -446,6 +454,15 @@ func volumeStorageName(group types.Group) string {
 		return ""
 	}
 	return res[0].Storage[0].Name
+}
+
+// volumeSize returns the size of the volume group's single storage entry.
+func volumeSize(spec types.GroupSpec) uint64 {
+	res := spec.Resources
+	if len(res) != 1 || len(res[0].Storage) != 1 {
+		return 0
+	}
+	return res[0].Storage[0].Quantity.Value()
 }
 
 func (ms msgServer) UpdateParams(goCtx context.Context, req *types.MsgUpdateParams) (*types.MsgUpdateParamsResponse, error) {

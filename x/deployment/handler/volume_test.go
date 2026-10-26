@@ -13,6 +13,8 @@ import (
 	"pkg.akt.dev/go/node/deployment/v1"
 	dvbeta "pkg.akt.dev/go/node/deployment/v1beta5"
 	deposit "pkg.akt.dev/go/node/types/deposit/v1"
+	rtypes "pkg.akt.dev/go/node/types/resources/v1beta4"
+	"pkg.akt.dev/go/node/types/unit"
 
 	testutil "pkg.akt.dev/node/v2/testutil/fixtures"
 	"pkg.akt.dev/node/v2/x/deployment/handler"
@@ -298,6 +300,17 @@ func TestVolumeReplicaBounds(t *testing.T) {
 
 	t.Run("backref counted", func(t *testing.T) {
 		require.Equal(t, uint64(1), vs.dkeeper.GetVolumeReplicaCount(vs.ctx, volumeGroupID(target)))
+	})
+
+	t.Run("replica smaller than its source rejected", func(t *testing.T) {
+		small := vs.createVolumeMsg(t, "pg-data-small")
+		small.Groups[0].Volume.ReplicaOf = volumeRef(target)
+		small.Groups[0].Resources[0].Storage[0].Quantity = rtypes.NewResourceValue(unit.Gi)
+
+		res, err := vs.vhandler(vs.ctx, small)
+		require.Nil(t, res)
+		require.ErrorIs(t, err, v1.ErrInvalidVolumeReplica)
+		require.ErrorContains(t, err, "below the source volume")
 	})
 
 	t.Run("replica beyond max_replicas rejected", func(t *testing.T) {

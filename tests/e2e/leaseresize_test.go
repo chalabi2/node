@@ -454,3 +454,100 @@ func TestLeaseResizeE2E_AcceptAfterSameBlockWithdraw(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, uact(2), payment.State.Rate)
 }
+
+// grownVolume is a volume order's units with its 10Gi of storage grown to
+// 20Gi.
+func grownVolume(order mvbeta.Order) dvbeta.ResourceUnits {
+	rus := order.Spec.Resources.Dup()
+	rus[0].Storage[0].Quantity = rtypes.NewResourceValue(20 * unit.Gi)
+
+	return rus
+}
+
+// closeThroughReclamation closes the deployment the way a tenant does when
+// its lease offered a reclamation window: the first close starts the window,
+// the second completes the close once it has passed.
+func (s *smSuite) closeThroughReclamation(did dv1.DeploymentID) {
+	s.t.Helper()
+
+	_, err := s.dhandler(s.Context(), &dvbeta.MsgCloseDeployment{ID: did})
+	require.NoError(s.t, err)
+
+	s.SetBlockTime(s.Context().BlockTime().Add(25 * time.Hour))
+	_, err = s.dhandler(s.Context(), &dvbeta.MsgCloseDeployment{ID: did})
+	require.NoError(s.t, err)
+}
+
+func TestLeaseResizeE2E_AdoptGrownVolume(t *testing.T) {
+	s := setupStorageMarketSuite(t)
+	s.enableVolumeOrders()
+	s.enableLeaseResize()
+
+	owner := testutil.AccAddress(t).String()
+	provider := s.createProvider(smVolumeProviderAttrs())
+	lid, volOrder := s.fullVolumeLease(owner, "pg-data", provider, s.defaultDeposit())
+
+	_, err := s.mhandler(s.Context(), mvbeta.NewMsgResizeLease(lid, grownVolume(volOrder), nil))
+	require.NoError(t, err)
+	_, err = s.mhandler(s.Context(), mvbeta.NewMsgAcceptLeaseResize(lid, uact(1), s.pendingDigest(lid)))
+	require.NoError(t, err)
+
+	s.closeThroughReclamation(lid.DeploymentID())
+	adoptRef := smVolumeRef(volOrder)
+
+	// the SDL the volume was first deployed with asks for 10Gi; the 20Gi of
+	// retained data does not fit it
+	msg := s.volumeCreateMsg(owner, "pg-data", s.defaultDeposit())
+	msg.Groups[0].Volume.Adopt = &adoptRef
+	_, err = s.dhandler(s.Context(), msg)
+	require.ErrorIs(t, err, dv1.ErrInvalidVolumeAdoption)
+
+	msg = s.volumeCreateMsg(owner, "pg-data", s.defaultDeposit())
+	msg.Groups[0].Volume.Adopt = &adoptRef
+	msg.Groups[0].Resources[0].Storage[0].Quantity = rtypes.NewResourceValue(20 * unit.Gi)
+	_, err = s.dhandler(s.Context(), msg)
+	require.NoError(t, err)
+}
+
+func TestLeaseResizeE2E_ReplicatingVolumeKeepsItsSize(t *testing.T) {
+	s := setupStorageMarketSuite(t)
+	s.enableVolumeOrders()
+	s.enableLeaseResize()
+
+	owner := testutil.AccAddress(t).String()
+	window := 24 * time.Hour
+
+	lease := func(msg *dvbeta.MsgCreateDeployment, provider sdk.AccAddress) (mv1.LeaseID, mvbeta.Order) {
+		t.Helper()
+
+		_, err := s.dhandler(s.Context(), msg)
+		require.NoError(t, err)
+
+		order, found := s.MarketKeeper().GetOrder(s.Context(), mv1.OrderID{Owner: owner, DSeq: msg.ID.DSeq, GSeq: 1, OSeq: 1})
+		require.True(t, found)
+
+		return s.bidAndLease(order, provider, &window), order
+	}
+
+	srcMsg := s.volumeCreateMsg(owner, "pg-data", s.defaultDeposit())
+	srcMsg.Groups[0].Volume.MaxReplicas = 1
+	srcLid, srcOrder := lease(srcMsg, s.createProvider(smVolumeProviderAttrs()))
+
+	// a replica on another provider, as when migrating the volume
+	repMsg := s.volumeCreateMsg(owner, "pg-data-r1", s.defaultDeposit())
+	srcRef := smVolumeRef(srcOrder)
+	repMsg.Groups[0].Volume.ReplicaOf = &srcRef
+	repLid, repOrder := lease(repMsg, s.createProvider(smVolumeProviderAttrs()))
+
+	_, err := s.mhandler(s.Context(), mvbeta.NewMsgResizeLease(srcLid, grownVolume(srcOrder), nil))
+	require.ErrorIs(t, err, mv1.ErrInvalidLeaseResize, "the source of a live replica keeps its size")
+
+	_, err = s.mhandler(s.Context(), mvbeta.NewMsgResizeLease(repLid, grownVolume(repOrder), nil))
+	require.ErrorIs(t, err, mv1.ErrInvalidLeaseResize, "a replica of a live source keeps its size")
+
+	// once the replica is gone the source is a plain volume again
+	s.closeThroughReclamation(repLid.DeploymentID())
+
+	_, err = s.mhandler(s.Context(), mvbeta.NewMsgResizeLease(srcLid, grownVolume(srcOrder), nil))
+	require.NoError(t, err)
+}

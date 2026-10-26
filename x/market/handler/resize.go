@@ -8,6 +8,7 @@ import (
 	sdk "github.com/cosmos/cosmos-sdk/types"
 
 	dtypes "pkg.akt.dev/go/node/deployment/v1"
+	dvbeta "pkg.akt.dev/go/node/deployment/v1beta5"
 	mv1 "pkg.akt.dev/go/node/market/v1"
 	mvbeta "pkg.akt.dev/go/node/market/v2beta1"
 )
@@ -59,6 +60,12 @@ func (ms msgServer) ResizeLease(goCtx context.Context, msg *mvbeta.MsgResizeLeas
 		if err := next.ValidateVolumeBounds(dparams); err != nil {
 			return nil, cerrors.Wrap(mv1.ErrInvalidLeaseResize, err.Error())
 		}
+
+		// a replica copies its source block for block, so neither side of a
+		// live replication changes size until the migration is done
+		if ms.replicating(ctx, group) {
+			return nil, cerrors.Wrap(mv1.ErrInvalidLeaseResize, "a volume being replicated cannot be resized")
+		}
 	}
 
 	if pending, found := ms.keepers.Market.GetLeaseResize(ctx, msg.ID.DeploymentID()); found && !pending.Expired(ctx.BlockTime()) {
@@ -92,6 +99,24 @@ func (ms msgServer) ResizeLease(goCtx context.Context, msg *mvbeta.MsgResizeLeas
 	}
 
 	return &mvbeta.MsgResizeLeaseResponse{}, nil
+}
+
+// replicating reports whether the volume group is either end of a live
+// replication: the source of a live replica, or a replica whose source is
+// still live.
+func (ms msgServer) replicating(ctx sdk.Context, group dvbeta.Group) bool {
+	if ms.keepers.Deployment.GetVolumeReplicaCount(ctx, group.ID) > 0 {
+		return true
+	}
+
+	ref := group.GroupSpec.Volume.ReplicaOf
+	if ref == nil {
+		return false
+	}
+
+	source, found := ms.keepers.Deployment.GetGroup(ctx, ref.GroupID())
+
+	return found && (source.State == dvbeta.GroupOpen || source.State == dvbeta.GroupPaused)
 }
 
 // AcceptLeaseResize applies a pending resize at the provider's price. Every

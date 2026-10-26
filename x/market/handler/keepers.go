@@ -49,6 +49,7 @@ type DeploymentKeeper interface {
 	UpdateDeployment(ctx sdk.Context, deployment dtypes.Deployment) error
 	SaveGroup(ctx sdk.Context, group dbeta.Group) error
 	GetParams(ctx sdk.Context) (dbeta.Params, error)
+	GetVolumeReplicaCount(ctx sdk.Context, id dtypes.GroupID) uint64
 }
 
 type AuthzKeeper interface {
