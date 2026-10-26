@@ -31,4 +31,8 @@ var (
 	// ErrVolumeAttachmentLimit is the error when the referenced volume has
 	// reached its max_attachments bound
 	ErrVolumeAttachmentLimit = errorsmod.Register(mv1.ModuleName, 106, "volume attachment limit reached")
+	// ErrVolumePolicyNotAccepted is the error when a bid does not carry its
+	// order's volume policy: a volume-order bid without it or with another
+	// policy, or a bid on any other order with one
+	ErrVolumePolicyNotAccepted = errorsmod.Register(mv1.ModuleName, 107, "bid volume policy does not match the order")
 )

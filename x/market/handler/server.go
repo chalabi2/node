@@ -120,13 +120,16 @@ func (ms msgServer) CreateBid(goCtx context.Context, msg *mvbeta.MsgCreateBid) (
 		}
 	}
 
-	// AEP-87 volume gates: a volume-group bid commits to the reclamation
-	// floor and exact storage quantities; an attaching-group bid is
-	// chain-gated to the volume's provider (colocation).
+	// AEP-87 volume gates: a volume-group bid commits to the order's volume
+	// policy, the reclamation floor and exact storage quantities; an
+	// attaching-group bid is chain-gated to the volume's provider
+	// (colocation).
 	if order.Spec.Volume != nil {
 		if err := ms.validateVolumeBid(ctx, params, order, msg); err != nil {
 			return nil, err
 		}
+	} else if msg.VolumePolicy != nil {
+		return nil, ErrVolumePolicyNotAccepted.Wrap("not a volume order")
 	} else if err := ms.validateAttachRefs(ctx, order.Spec, order.ID.Owner, msg.ID.Provider); err != nil {
 		return nil, err
 	}
@@ -442,6 +445,13 @@ func (ms msgServer) LeaseStartReclaim(goCtx context.Context, msg *mvbeta.MsgLeas
 func (ms msgServer) validateVolumeBid(ctx sdk.Context, params mvbeta.Params, order mvbeta.Order, msg *mvbeta.MsgCreateBid) error {
 	if !params.VolumeOrdersEnabled {
 		return ErrVolumeOrdersDisabled
+	}
+
+	// The bid must carry the order's volume policy. Provider software that
+	// predates volumes never sets it, so it cannot win an order whose
+	// retention, replication and adoption duties it would not honor.
+	if msg.VolumePolicy == nil || !msg.VolumePolicy.Equal(order.Spec.Volume) {
+		return ErrVolumePolicyNotAccepted
 	}
 
 	if msg.ReclamationWindow == nil || *msg.ReclamationWindow < params.MinVolumeReclamationWindow {

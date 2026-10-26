@@ -202,6 +202,7 @@ func (s *smSuite) bidAndLease(order mvbeta.Order, provider sdk.AccAddress, windo
 		},
 		ResourcesOffer:    mvbeta.ResourceOfferFromRU(order.Spec.Resources),
 		ReclamationWindow: window,
+		VolumePolicy:      order.Spec.Volume,
 	})
 	require.NoError(s.t, err)
 
@@ -387,6 +388,7 @@ func TestStorageMarketE2E_FlagGating(t *testing.T) {
 		},
 		ResourcesOffer:    mvbeta.ResourceOfferFromRU(order.Spec.Resources),
 		ReclamationWindow: &window,
+		VolumePolicy:      order.Spec.Volume,
 	})
 	require.ErrorIs(t, err, mhandler.ErrVolumeOrdersDisabled)
 }
@@ -591,6 +593,7 @@ func TestStorageMarketE2E_RetentionAdoption(t *testing.T) {
 		window := 24 * time.Hour
 		strangerBid := smAttachBidMsg(order, stranger)
 		strangerBid.ReclamationWindow = &window
+		strangerBid.VolumePolicy = order.Spec.Volume
 		_, err = s.mhandler(s.Context(), strangerBid)
 		require.ErrorIs(t, err, mhandler.ErrVolumeAdoptionProvider)
 

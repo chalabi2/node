@@ -152,6 +152,7 @@ func volumeBidMsg(order mvbeta.Order, gspec dtypes.GroupSpec, provider sdk.AccAd
 		},
 		ResourcesOffer:    mvbeta.ResourceOfferFromRU(gspec.Resources),
 		ReclamationWindow: window,
+		VolumePolicy:      order.Spec.Volume,
 	}
 }
 
@@ -239,6 +240,35 @@ func TestCreateBidVolume_OfferQuantityMismatch(t *testing.T) {
 	require.ErrorIs(t, err, handler.ErrVolumeOfferMismatch)
 }
 
+func TestCreateBidVolume_PolicyAccepted(t *testing.T) {
+	suite := setupTestSuite(t)
+	prepareBlanketMocks(suite)
+	suite.enableVolumeOrders()
+
+	order, gspec := suite.createVolumeOrder("pgdata")
+	prov := suite.newVolumeProvider()
+	providerAddr := sdk.MustAccAddressFromBech32(prov.Owner)
+	window := 24 * time.Hour
+
+	// Provider software that predates volumes sends no policy.
+	msg := volumeBidMsg(order, gspec, providerAddr, &window)
+	msg.VolumePolicy = nil
+	_, err := suite.handler(suite.Context(), msg)
+	require.ErrorIs(t, err, handler.ErrVolumePolicyNotAccepted)
+
+	// A policy other than the order's: a shorter retention.
+	msg = volumeBidMsg(order, gspec, providerAddr, &window)
+	msg.VolumePolicy = order.Spec.Volume.Dup()
+	msg.VolumePolicy.Retention = time.Hour
+	_, err = suite.handler(suite.Context(), msg)
+	require.ErrorIs(t, err, handler.ErrVolumePolicyNotAccepted)
+
+	// The order's own policy.
+	res, err := suite.handler(suite.Context(), volumeBidMsg(order, gspec, providerAddr, &window))
+	require.NoError(t, err)
+	require.NotNil(t, res)
+}
+
 func TestCreateBidVolume_AdoptionProviderGate(t *testing.T) {
 	suite := setupTestSuite(t)
 	prepareBlanketMocks(suite)
@@ -311,6 +341,12 @@ func TestCreateBidAttach_Colocation(t *testing.T) {
 	// A provider without the volume lease fails the colocation contract.
 	_, err := suite.handler(suite.Context(), attachBidMsg(order, gspec, elsewhereAddr))
 	require.ErrorIs(t, err, handler.ErrVolumeNotColocated)
+
+	// A bid on the compute order carrying a volume policy fails.
+	msg := attachBidMsg(order, gspec, colocatedAddr)
+	msg.VolumePolicy = volOrder.Spec.Volume
+	_, err = suite.handler(suite.Context(), msg)
+	require.ErrorIs(t, err, handler.ErrVolumePolicyNotAccepted)
 
 	// The volume's provider passes.
 	res, err := suite.handler(suite.Context(), attachBidMsg(order, gspec, colocatedAddr))
