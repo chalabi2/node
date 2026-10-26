@@ -66,6 +66,7 @@ func (k Keeper) CancelLeaseResize(ctx sdk.Context, id mv1.LeaseID, reason mv1.Le
 	return ctx.EventManager().EmitTypedEvent(&mv1.EventLeaseResizeCanceled{
 		ID:     id,
 		Reason: reason,
+		Digest: resize.Digest,
 	})
 }
 

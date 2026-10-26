@@ -71,6 +71,17 @@ func newManifestHash(t *testing.T) []byte {
 	return hash
 }
 
+// pendingDigest is the digest of the lease's pending resize, which an accept
+// or a reject must name.
+func (s *smSuite) pendingDigest(lid mv1.LeaseID) []byte {
+	s.t.Helper()
+
+	pending, found := s.MarketKeeper().GetLeaseResize(s.Context(), lid.DeploymentID())
+	require.True(s.t, found)
+
+	return pending.Digest
+}
+
 func TestLeaseResizeE2E_ComputeHappyPath(t *testing.T) {
 	s := setupStorageMarketSuite(t)
 	s.enableLeaseResize()
@@ -94,22 +105,24 @@ func TestLeaseResizeE2E_ComputeHappyPath(t *testing.T) {
 	params, err := s.MarketKeeper().GetParams(s.Context())
 	require.NoError(t, err)
 
+	pending, found := s.MarketKeeper().GetLeaseResize(s.Context(), lid.DeploymentID())
+	require.True(t, found)
+	require.Equal(t, hash, pending.Hash)
+	require.Len(t, pending.Digest, mvbeta.LeaseResizeDigestSize)
+
 	smEnsureEvent(t, s.Context().EventManager().ABCIEvents(), &mv1.EventLeaseResizeRequested{
 		ID:        lid,
 		MaxPrice:  uact(3),
 		ExpiresAt: start.Add(params.LeaseResizeTTL).Unix(),
+		Digest:    pending.Digest,
 	})
-
-	pending, found := s.MarketKeeper().GetLeaseResize(s.Context(), lid.DeploymentID())
-	require.True(t, found)
-	require.Equal(t, hash, pending.Hash)
 
 	// nothing about the lease changes until the provider accepts
 	lease, _ := s.MarketKeeper().GetLease(s.Context(), lid)
 	require.Equal(t, uact(1), lease.Price)
 
 	s.SetBlockHeight(h0 + 150)
-	_, err = s.mhandler(s.Context(), mvbeta.NewMsgAcceptLeaseResize(lid, uact(2)))
+	_, err = s.mhandler(s.Context(), mvbeta.NewMsgAcceptLeaseResize(lid, uact(2), pending.Digest))
 	require.NoError(t, err)
 
 	lease, _ = s.MarketKeeper().GetLease(s.Context(), lid)
@@ -133,7 +146,7 @@ func TestLeaseResizeE2E_ComputeHappyPath(t *testing.T) {
 	require.False(t, found)
 
 	events := s.Context().EventManager().ABCIEvents()
-	smEnsureEvent(t, events, &mv1.EventLeaseResized{ID: lid, Price: uact(2), PrevPrice: uact(1)})
+	smEnsureEvent(t, events, &mv1.EventLeaseResized{ID: lid, Price: uact(2), PrevPrice: uact(1), Digest: pending.Digest})
 	smEnsureEvent(t, events, &dv1.EventDeploymentUpdated{ID: lid.DeploymentID(), Hash: hash})
 
 	// 150 blocks were charged at the old 1uact rate before the switch
@@ -197,15 +210,15 @@ func TestLeaseResizeE2E_Gates(t *testing.T) {
 	_, err = s.mhandler(s.Context(), mvbeta.NewMsgResizeLease(lid, resources, newManifestHash(t)))
 	require.ErrorIs(t, err, mv1.ErrLeaseResizePending)
 
-	_, err = s.mhandler(s.Context(), mvbeta.NewMsgAcceptLeaseResize(lid, uact(4)))
+	_, err = s.mhandler(s.Context(), mvbeta.NewMsgAcceptLeaseResize(lid, uact(4), s.pendingDigest(lid)))
 	require.ErrorIs(t, err, mv1.ErrLeaseResizePriceTooHigh)
 
-	_, err = s.mhandler(s.Context(), mvbeta.NewMsgAcceptLeaseResize(lid, sdk.NewDecCoin(sdkutil.DenomUakt, sdkmath.NewInt(1))))
+	_, err = s.mhandler(s.Context(), mvbeta.NewMsgAcceptLeaseResize(lid, sdk.NewDecCoin(sdkutil.DenomUakt, sdkmath.NewInt(1)), s.pendingDigest(lid)))
 	require.ErrorIs(t, err, mv1.ErrInvalidLeaseResize)
 
 	other := lid
 	other.Provider = testutil.AccAddress(t).String()
-	_, err = s.mhandler(s.Context(), mvbeta.NewMsgAcceptLeaseResize(other, uact(2)))
+	_, err = s.mhandler(s.Context(), mvbeta.NewMsgAcceptLeaseResize(other, uact(2), s.pendingDigest(lid)))
 	require.ErrorIs(t, err, mv1.ErrLeaseResizeNotFound)
 
 	// past its ttl the request can no longer be accepted, and a new one
@@ -214,7 +227,7 @@ func TestLeaseResizeE2E_Gates(t *testing.T) {
 	require.NoError(t, err)
 	s.SetBlockTime(s.Context().BlockTime().Add(params.LeaseResizeTTL + time.Second))
 
-	_, err = s.mhandler(s.Context(), mvbeta.NewMsgAcceptLeaseResize(lid, uact(2)))
+	_, err = s.mhandler(s.Context(), mvbeta.NewMsgAcceptLeaseResize(lid, uact(2), s.pendingDigest(lid)))
 	require.ErrorIs(t, err, mv1.ErrLeaseResizeExpired)
 
 	hash := newManifestHash(t)
@@ -225,7 +238,7 @@ func TestLeaseResizeE2E_Gates(t *testing.T) {
 	require.True(t, found)
 	require.Equal(t, hash, pending.Hash)
 
-	_, err = s.mhandler(s.Context(), mvbeta.NewMsgAcceptLeaseResize(lid, uact(3)))
+	_, err = s.mhandler(s.Context(), mvbeta.NewMsgAcceptLeaseResize(lid, uact(3), pending.Digest))
 	require.NoError(t, err)
 }
 
@@ -250,21 +263,25 @@ func TestLeaseResizeE2E_RejectCancelClose(t *testing.T) {
 	}
 
 	request()
-	_, err := s.mhandler(s.Context(), mvbeta.NewMsgRejectLeaseResize(lid, mv1.LeaseResizeRejectCapacity))
+	digest := s.pendingDigest(lid)
+	_, err := s.mhandler(s.Context(), mvbeta.NewMsgRejectLeaseResize(lid, mv1.LeaseResizeRejectCapacity, digest))
 	require.NoError(t, err)
 	require.False(t, pending())
 	smEnsureEvent(t, s.Context().EventManager().ABCIEvents(), &mv1.EventLeaseResizeCanceled{
 		ID:     lid,
 		Reason: mv1.LeaseResizeRejectCapacity,
+		Digest: digest,
 	})
 
 	request()
+	digest = s.pendingDigest(lid)
 	_, err = s.mhandler(s.Context(), mvbeta.NewMsgCancelLeaseResize(lid))
 	require.NoError(t, err)
 	require.False(t, pending())
 	smEnsureEvent(t, s.Context().EventManager().ABCIEvents(), &mv1.EventLeaseResizeCanceled{
 		ID:     lid,
 		Reason: mv1.LeaseResizeCancelReasonOwner,
+		Digest: digest,
 	})
 
 	_, err = s.mhandler(s.Context(), mvbeta.NewMsgCancelLeaseResize(lid))
@@ -272,12 +289,14 @@ func TestLeaseResizeE2E_RejectCancelClose(t *testing.T) {
 
 	// a lease that closes takes its pending resize with it
 	request()
+	digest = s.pendingDigest(lid)
 	_, err = s.mhandler(s.Context(), &mvbeta.MsgCloseLease{ID: lid, Reason: mv1.LeaseClosedReasonOwner})
 	require.NoError(t, err)
 	require.False(t, pending())
 	smEnsureEvent(t, s.Context().EventManager().ABCIEvents(), &mv1.EventLeaseResizeCanceled{
 		ID:     lid,
 		Reason: mv1.LeaseResizeCancelReasonLeaseClosed,
+		Digest: digest,
 	})
 
 	_, err = s.mhandler(s.Context(), mvbeta.NewMsgResizeLease(lid, resources, newManifestHash(t)))
@@ -319,7 +338,8 @@ func TestLeaseResizeE2E_VolumeGrow(t *testing.T) {
 
 	hashBefore, _ := s.DeploymentKeeper().GetDeployment(s.Context(), lid.DeploymentID())
 
-	_, err = s.mhandler(s.Context(), mvbeta.NewMsgAcceptLeaseResize(lid, uact(2)))
+	digest := s.pendingDigest(lid)
+	_, err = s.mhandler(s.Context(), mvbeta.NewMsgAcceptLeaseResize(lid, uact(2), digest))
 	require.NoError(t, err)
 
 	group, _ := s.DeploymentKeeper().GetGroup(s.Context(), lid.GroupID())
@@ -332,7 +352,7 @@ func TestLeaseResizeE2E_VolumeGrow(t *testing.T) {
 	hashAfter, _ := s.DeploymentKeeper().GetDeployment(s.Context(), lid.DeploymentID())
 	require.Equal(t, hashBefore.Hash, hashAfter.Hash)
 
-	smEnsureEvent(t, s.Context().EventManager().ABCIEvents(), &mv1.EventLeaseResized{ID: lid, Price: uact(2), PrevPrice: uact(1)})
+	smEnsureEvent(t, s.Context().EventManager().ABCIEvents(), &mv1.EventLeaseResized{ID: lid, Price: uact(2), PrevPrice: uact(1), Digest: digest})
 }
 
 func TestLeaseResizeE2E_AttachedComputeKeepsAttachment(t *testing.T) {
@@ -358,7 +378,7 @@ func TestLeaseResizeE2E_AttachedComputeKeepsAttachment(t *testing.T) {
 
 	_, err = s.mhandler(s.Context(), mvbeta.NewMsgResizeLease(lid, resources, newManifestHash(t)))
 	require.NoError(t, err)
-	_, err = s.mhandler(s.Context(), mvbeta.NewMsgAcceptLeaseResize(lid, uact(1)))
+	_, err = s.mhandler(s.Context(), mvbeta.NewMsgAcceptLeaseResize(lid, uact(1), s.pendingDigest(lid)))
 	require.NoError(t, err)
 
 	require.True(t, s.MarketKeeper().HasAttachments(s.Context(), volOrder.ID.GroupID()))
@@ -366,6 +386,48 @@ func TestLeaseResizeE2E_AttachedComputeKeepsAttachment(t *testing.T) {
 	order, _ := s.MarketKeeper().GetOrder(s.Context(), lid.OrderID())
 	require.Equal(t, computeOrder.Spec.Resources[0].Volumes, order.Spec.Resources[0].Volumes,
 		"cascade-detach reads the order copy, so it must keep the volume refs")
+}
+
+func TestLeaseResizeE2E_AnswerNamesItsRequest(t *testing.T) {
+	s := setupStorageMarketSuite(t)
+	s.enableLeaseResize()
+
+	owner := testutil.AccAddress(t).String()
+	provider := s.createProvider(nil)
+	lid, order := s.computeLease(owner, provider)
+
+	// the provider works out its answer to the first request...
+	_, err := s.mhandler(s.Context(), mvbeta.NewMsgResizeLease(lid, grownCompute(order.Spec), newManifestHash(t)))
+	require.NoError(t, err)
+	first := s.pendingDigest(lid)
+
+	// ...while the tenant replaces it, in the same block, with a bigger one
+	_, err = s.mhandler(s.Context(), mvbeta.NewMsgCancelLeaseResize(lid))
+	require.NoError(t, err)
+
+	bigger := grownCompute(order.Spec)
+	bigger[0].CPU.Units = rtypes.NewResourceValue(bigger[0].CPU.Units.Value() * 2)
+	_, err = s.mhandler(s.Context(), mvbeta.NewMsgResizeLease(lid, bigger, newManifestHash(t)))
+	require.NoError(t, err)
+	second := s.pendingDigest(lid)
+	require.NotEqual(t, first, second)
+
+	// an answer decided on the first request applies to neither
+	_, err = s.mhandler(s.Context(), mvbeta.NewMsgAcceptLeaseResize(lid, uact(2), first))
+	require.ErrorIs(t, err, mv1.ErrLeaseResizeChanged)
+
+	_, err = s.mhandler(s.Context(), mvbeta.NewMsgRejectLeaseResize(lid, mv1.LeaseResizeRejectPrice, first))
+	require.ErrorIs(t, err, mv1.ErrLeaseResizeChanged)
+
+	group, _ := s.DeploymentKeeper().GetGroup(s.Context(), lid.GroupID())
+	require.True(t, resourcesEqual(group.GroupSpec.Resources, order.Spec.Resources), "nothing was applied")
+
+	// the replacement is answered on its own
+	_, err = s.mhandler(s.Context(), mvbeta.NewMsgAcceptLeaseResize(lid, uact(3), second))
+	require.NoError(t, err)
+
+	group, _ = s.DeploymentKeeper().GetGroup(s.Context(), lid.GroupID())
+	require.True(t, resourcesEqual(group.GroupSpec.Resources, bigger))
 }
 
 func TestLeaseResizeE2E_AcceptAfterSameBlockWithdraw(t *testing.T) {
@@ -385,7 +447,7 @@ func TestLeaseResizeE2E_AcceptAfterSameBlockWithdraw(t *testing.T) {
 	_, err = s.mhandler(s.Context(), &mvbeta.MsgWithdrawLease{ID: lid})
 	require.NoError(t, err)
 
-	_, err = s.mhandler(s.Context(), mvbeta.NewMsgAcceptLeaseResize(lid, uact(2)))
+	_, err = s.mhandler(s.Context(), mvbeta.NewMsgAcceptLeaseResize(lid, uact(2), s.pendingDigest(lid)))
 	require.NoError(t, err)
 
 	payment, err := s.EscrowKeeper().GetPayment(s.Context(), lid.ToEscrowPaymentID())

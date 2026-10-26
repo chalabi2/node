@@ -74,6 +74,10 @@ func (ms msgServer) ResizeLease(goCtx context.Context, msg *mvbeta.MsgResizeLeas
 		ExpiresAt:   ctx.BlockTime().Add(params.LeaseResizeTTL).Unix(),
 	}
 
+	if resize.Digest, err = resize.ComputeDigest(); err != nil {
+		return nil, err
+	}
+
 	if err := ms.keepers.Market.SetLeaseResize(ctx, resize); err != nil {
 		return nil, err
 	}
@@ -82,6 +86,7 @@ func (ms msgServer) ResizeLease(goCtx context.Context, msg *mvbeta.MsgResizeLeas
 		ID:        msg.ID,
 		MaxPrice:  resize.MaxPrice,
 		ExpiresAt: resize.ExpiresAt,
+		Digest:    resize.Digest,
 	}); err != nil {
 		return nil, err
 	}
@@ -99,6 +104,12 @@ func (ms msgServer) AcceptLeaseResize(goCtx context.Context, msg *mvbeta.MsgAcce
 	resize, found := ms.keepers.Market.GetLeaseResize(ctx, msg.ID.DeploymentID())
 	if !found || !resize.LeaseID.Equals(msg.ID) {
 		return nil, mv1.ErrLeaseResizeNotFound
+	}
+
+	// the price was worked out for the request the provider names; a request
+	// that replaced it in the meantime has to be answered on its own
+	if !bytes.Equal(msg.Digest, resize.Digest) {
+		return nil, mv1.ErrLeaseResizeChanged
 	}
 
 	if resize.Expired(ctx.BlockTime()) {
@@ -193,6 +204,7 @@ func (ms msgServer) AcceptLeaseResize(goCtx context.Context, msg *mvbeta.MsgAcce
 		ID:        msg.ID,
 		Price:     msg.Price,
 		PrevPrice: prevPrice,
+		Digest:    resize.Digest,
 	}); err != nil {
 		return nil, err
 	}
@@ -207,6 +219,10 @@ func (ms msgServer) RejectLeaseResize(goCtx context.Context, msg *mvbeta.MsgReje
 	resize, found := ms.keepers.Market.GetLeaseResize(ctx, msg.ID.DeploymentID())
 	if !found || !resize.LeaseID.Equals(msg.ID) {
 		return nil, mv1.ErrLeaseResizeNotFound
+	}
+
+	if !bytes.Equal(msg.Digest, resize.Digest) {
+		return nil, mv1.ErrLeaseResizeChanged
 	}
 
 	if err := ms.keepers.Market.CancelLeaseResize(ctx, msg.ID, msg.Reason); err != nil {
