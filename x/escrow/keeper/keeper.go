@@ -46,6 +46,7 @@ type Keeper interface {
 	PaymentCreate(ctx sdk.Context, id escrowid.Payment, owner sdk.AccAddress, rate sdk.DecCoin) error
 	PaymentWithdraw(ctx sdk.Context, id escrowid.Payment) error
 	PaymentClose(ctx sdk.Context, id escrowid.Payment) error
+	PaymentUpdateRate(ctx sdk.Context, id escrowid.Payment, rate sdk.DecCoin) error
 	GetAccount(ctx sdk.Context, id escrowid.Account) (etypes.Account, error)
 	GetPayment(ctx sdk.Context, id escrowid.Payment) (etypes.Payment, error)
 	AddOnAccountClosedHook(AccountHook) Keeper
@@ -813,6 +814,67 @@ func (k *keeper) PaymentCreate(ctx sdk.Context, id escrowid.Payment, owner sdk.A
 	}
 
 	return nil
+}
+
+// PaymentUpdateRate switches an open payment to a new rate from the current
+// block on. Settlement is lazy and charges every unsettled block at whatever
+// rate is stored when it runs, so the account is settled at the old rate
+// first; otherwise the blocks since the last settle would be re-priced.
+func (k *keeper) PaymentUpdateRate(ctx sdk.Context, id escrowid.Payment, rate sdk.DecCoin) error {
+	acc, err := k.getAccount(ctx, id.Account())
+	if err != nil {
+		return err
+	}
+
+	pmnt, err := k.getPayment(ctx, id)
+	if err != nil {
+		return err
+	}
+
+	if pmnt.State.State != etypes.StateOpen {
+		return module.ErrPaymentClosed
+	}
+
+	if rate.Denom != pmnt.State.Rate.Denom {
+		return module.ErrInvalidDenomination
+	}
+
+	if !rate.IsPositive() {
+		return module.ErrPaymentRateZero
+	}
+
+	payments, od, err := k.accountSettle(ctx, acc)
+	if err != nil {
+		return err
+	}
+
+	if od {
+		return module.ErrAccountOverdrawn
+	}
+
+	// a settle earlier in this block leaves nothing due, so it returns no
+	// payments and the stored one is already current
+	found := false
+	for i := range payments {
+		if payments[i].ID.Key() == id.Key() {
+			payments[i].State.Rate = rate
+			payments[i].dirty = true
+			found = true
+		}
+	}
+
+	if !found {
+		pmnt.State.Rate = rate
+		pmnt.dirty = true
+		payments = append(payments, *pmnt)
+	}
+
+	if err := k.save(ctx, acc, payments); err != nil {
+		return err
+	}
+
+	// the settle above reported the runway at the old rate
+	return k.emitAccountRunway(ctx, acc, k.accountPayments(ctx, acc.ID, []etypes.State{etypes.StateOpen}))
 }
 
 func (k *keeper) PaymentWithdraw(ctx sdk.Context, id escrowid.Payment) error {
