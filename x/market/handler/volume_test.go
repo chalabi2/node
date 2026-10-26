@@ -13,9 +13,9 @@ import (
 	dtypes "pkg.akt.dev/go/node/deployment/v1beta5"
 	mv1 "pkg.akt.dev/go/node/market/v1"
 	mvbeta "pkg.akt.dev/go/node/market/v2beta1"
+	ptypes "pkg.akt.dev/go/node/provider/v1beta4"
 	attr "pkg.akt.dev/go/node/types/attributes/v1"
 	deposit "pkg.akt.dev/go/node/types/deposit/v1"
-	ptypes "pkg.akt.dev/go/node/provider/v1beta4"
 	testutil "pkg.akt.dev/node/v2/testutil/fixtures"
 
 	market "pkg.akt.dev/node/v2/x/market"
