@@ -29,6 +29,8 @@ type MarketKeeper interface {
 	SaveOrder(ctx sdk.Context, order mvbeta.Order) error
 	SaveBid(ctx sdk.Context, bid mvbeta.Bid) error
 	SaveLease(ctx sdk.Context, lease mv1.Lease) error
+	// GetLeaseResize returns the deployment's pending lease resize, if any.
+	GetLeaseResize(ctx sdk.Context, id dv1.DeploymentID) (mvbeta.LeaseResize, bool)
 
 	// AEP-87 narrow volume additions.
 	//

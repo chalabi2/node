@@ -241,6 +241,36 @@ func TestLeaseResizeE2E_Gates(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestLeaseResizeE2E_UpdateWaitsForPendingResize(t *testing.T) {
+	s := setupStorageMarketSuite(t)
+	s.enableLeaseResize()
+
+	owner := testutil.AccAddress(t).String()
+	provider := s.createProvider(nil)
+	lid, order := s.computeLease(owner, provider)
+
+	_, err := s.mhandler(s.Context(), mvbeta.NewMsgResizeLease(lid, grownCompute(order.Spec), newManifestHash(t)))
+	require.NoError(t, err)
+
+	// the accept would set the deployment's hash to the request's, undoing
+	// an update made in between
+	update := &dvbeta.MsgUpdateDeployment{ID: lid.DeploymentID(), Hash: newManifestHash(t)}
+	_, err = s.dhandler(s.Context(), update)
+	require.ErrorIs(t, err, mv1.ErrLeaseResizePending)
+
+	// an expired request no longer holds updates back
+	params, err := s.MarketKeeper().GetParams(s.Context())
+	require.NoError(t, err)
+	s.SetBlockTime(s.Context().BlockTime().Add(params.LeaseResizeTTL + time.Second))
+
+	_, err = s.dhandler(s.Context(), update)
+	require.NoError(t, err)
+
+	deployment, found := s.DeploymentKeeper().GetDeployment(s.Context(), lid.DeploymentID())
+	require.True(t, found)
+	require.Equal(t, update.Hash, deployment.Hash)
+}
+
 func TestLeaseResizeE2E_RejectCancelClose(t *testing.T) {
 	s := setupStorageMarketSuite(t)
 	s.enableLeaseResize()

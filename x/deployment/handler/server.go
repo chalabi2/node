@@ -157,6 +157,12 @@ func (ms msgServer) UpdateDeployment(goCtx context.Context, msg *types.MsgUpdate
 		return &types.MsgUpdateDeploymentResponse{}, v1.ErrInvalidHash
 	}
 
+	// A pending lease resize sets the deployment's hash when it is accepted,
+	// so an update made before then would be undone by the accept.
+	if pending, found := ms.market.GetLeaseResize(ctx, msg.ID); found && !pending.Expired(ctx.BlockTime()) {
+		return &types.MsgUpdateDeploymentResponse{}, mv1.ErrLeaseResizePending
+	}
+
 	deployment.Hash = msg.Hash
 
 	if err := ms.deployment.UpdateDeployment(ctx, deployment); err != nil {
