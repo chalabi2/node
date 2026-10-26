@@ -74,16 +74,29 @@ func (up *upgrade) UpgradeHandler() upgradetypes.UpgradeHandler {
 			}
 		}
 
-		// Seed the AEP-87 market volume params. VolumeOrdersEnabled ships
-		// false: volume orders stay dark until governance flips the flag.
+		// Seed the AEP-87 market volume params and the lease resize params.
+		// Both features ship dark: VolumeOrdersEnabled and LeaseResizeEnabled
+		// stay false until governance flips them.
 		mparams, err := up.Keepers.Akash.Market.GetParams(sctx)
 		if err != nil {
 			return toVM, fmt.Errorf("failed to get market params: %w", err)
 		}
 
+		seeded := false
+
 		if mparams.MinVolumeReclamationWindow == 0 {
 			mparams.VolumeOrdersEnabled = mvbeta.DefaultVolumeOrdersEnabled
 			mparams.MinVolumeReclamationWindow = mvbeta.DefaultMinVolumeReclamationWindow
+			seeded = true
+		}
+
+		if mparams.LeaseResizeTTL == 0 {
+			mparams.LeaseResizeEnabled = mvbeta.DefaultLeaseResizeEnabled
+			mparams.LeaseResizeTTL = mvbeta.DefaultLeaseResizeTTL
+			seeded = true
+		}
+
+		if seeded {
 			if err = up.Keepers.Akash.Market.SetParams(sctx, mparams); err != nil {
 				return toVM, fmt.Errorf("failed to set market params: %w", err)
 			}
