@@ -398,6 +398,10 @@ func (ms msgServer) validateVolumeCreate(ctx sdk.Context, msg *types.MsgCreateDe
 		if tvol.Vid != vol.Vid {
 			return v1.ErrInvalidVolumeAdoption.Wrapf("vid mismatch: %q != %q", vol.Vid, tvol.Vid)
 		}
+		// a disk's data cannot be served as a bucket, nor a bucket's as a disk
+		if tvol.Access != vol.Access {
+			return v1.ErrInvalidVolumeAdoption.Wrapf("access mismatch: %s != %s", vol.Access, tvol.Access)
+		}
 		if name := volumeStorageName(target); name != adopt.Name {
 			return v1.ErrInvalidVolumeAdoption.Wrapf("volume name mismatch: %q != %q", adopt.Name, name)
 		}
@@ -425,6 +429,9 @@ func (ms msgServer) validateVolumeCreate(ctx sdk.Context, msg *types.MsgCreateDe
 		tvol := target.GroupSpec.Volume
 		if tvol == nil {
 			return v1.ErrInvalidVolumeReplica.Wrapf("group %s is not a volume group", rep.GroupID())
+		}
+		if tvol.IsBucket() {
+			return v1.ErrInvalidVolumeReplica.Wrapf("volume group %s is a bucket, which has no replicas", rep.GroupID())
 		}
 		if rep.Owner != msg.ID.Owner {
 			return v1.ErrInvalidVolumeReplica.Wrap("owner mismatch")

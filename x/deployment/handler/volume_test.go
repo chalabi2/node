@@ -184,6 +184,18 @@ func TestVolumeVidRetainedAndAdoption(t *testing.T) {
 		require.True(t, errors.Is(err, v1.ErrVidRetained))
 	})
 
+	t.Run("adoption that changes the volume's access rejected", func(t *testing.T) {
+		msg := vs.createVolumeMsg(t, "pg-data")
+		msg.Groups[0].Volume.Adopt = volumeRef(dead)
+		msg.Groups[0].Volume.Access = v1.VolumeAccessBucket
+		msg.Groups[0].Volume.MaxAttachments = 0
+
+		res, err := vs.vhandler(vs.ctx, msg)
+		require.Nil(t, res)
+		require.ErrorIs(t, err, v1.ErrInvalidVolumeAdoption)
+		require.ErrorContains(t, err, "access mismatch")
+	})
+
 	t.Run("adoption naming the retained volume passes", func(t *testing.T) {
 		msg := vs.createVolumeMsg(t, "pg-data")
 		msg.Groups[0].Volume.Adopt = volumeRef(dead)
@@ -282,6 +294,24 @@ func TestVolumeAdoptionInvalidTargets(t *testing.T) {
 		require.Nil(t, res)
 		require.True(t, errors.Is(err, v1.ErrInvalidVolumeAdoption))
 	})
+}
+
+func TestVolumeReplicaOfBucketRejected(t *testing.T) {
+	vs := setupVolumeTestSuite(t)
+
+	bucket := vs.createVolumeMsg(t, "media")
+	bucket.Groups[0].Volume.Access = v1.VolumeAccessBucket
+	bucket.Groups[0].Volume.MaxAttachments = 0
+	_, err := vs.vhandler(vs.ctx, bucket)
+	require.NoError(t, err)
+
+	replica := vs.createVolumeMsg(t, "media-r1")
+	replica.Groups[0].Volume.ReplicaOf = volumeRef(bucket)
+	res, err := vs.vhandler(vs.ctx, replica)
+
+	require.Nil(t, res)
+	require.ErrorIs(t, err, v1.ErrInvalidVolumeReplica)
+	require.ErrorContains(t, err, "is a bucket")
 }
 
 func TestVolumeReplicaBounds(t *testing.T) {
