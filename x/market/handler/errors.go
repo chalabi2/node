@@ -35,4 +35,7 @@ var (
 	// order's volume policy: a volume-order bid without it or with another
 	// policy, or a bid on any other order with one
 	ErrVolumePolicyNotAccepted = errorsmod.Register(mv1.ModuleName, 107, "bid volume policy does not match the order")
+	// ErrVolumeNotAttachable is the error when an attaching group references a
+	// bucket, which clients reach over the network rather than by attaching.
+	ErrVolumeNotAttachable = errorsmod.Register(mv1.ModuleName, 108, "volume is a bucket and cannot be attached")
 )

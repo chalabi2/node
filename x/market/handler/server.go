@@ -525,6 +525,10 @@ func (ms msgServer) validateAttachRefs(ctx sdk.Context, spec dbeta.GroupSpec, ow
 				return ErrVolumeRefInvalid.Wrapf("volume %s: not a volume group", ref)
 			}
 
+			if vol.IsBucket() {
+				return ErrVolumeNotAttachable.Wrapf("volume %s", ref)
+			}
+
 			if res := group.GroupSpec.Resources; len(res) != 1 || len(res[0].Storage) != 1 || res[0].Storage[0].Name != ref.Name {
 				return ErrVolumeRefInvalid.Wrapf("volume %s: name mismatch", ref)
 			}

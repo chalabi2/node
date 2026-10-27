@@ -402,6 +402,53 @@ func TestCreateBidAttach_RefInvalid(t *testing.T) {
 	})
 }
 
+func TestCreateBidAttach_RefusesBucket(t *testing.T) {
+	suite := setupTestSuite(t)
+	prepareBlanketMocks(suite)
+	suite.enableVolumeOrders()
+
+	prov := suite.createProvider(nil)
+	providerAddr := sdk.MustAccAddressFromBech32(prov.Owner)
+
+	_, _, volOrder, _ := suite.createVolumeLease("media", providerAddr, 24*time.Hour)
+	suite.makeBucket(volOrder)
+
+	order, gspec := suite.createComputeOrderWithRefs(volOrder.ID.Owner, volumeRefFor(volOrder))
+	_, err := suite.handler(suite.Context(), attachBidMsg(order, gspec, providerAddr))
+	require.ErrorIs(t, err, handler.ErrVolumeNotAttachable)
+}
+
+func TestCreateLeaseAttach_RefusesBucket(t *testing.T) {
+	suite := setupTestSuite(t)
+	prepareBlanketMocks(suite)
+	suite.enableVolumeOrders()
+
+	prov := suite.createProvider(nil)
+	providerAddr := sdk.MustAccAddressFromBech32(prov.Owner)
+
+	_, _, volOrder, _ := suite.createVolumeLease("media", providerAddr, 24*time.Hour)
+
+	order, gspec := suite.createComputeOrderWithRefs(volOrder.ID.Owner, volumeRefFor(volOrder))
+	bid, err := suite.MarketKeeper().CreateBid(suite.Context(), mv1.MakeBidID(order.ID, providerAddr), order.Price(), mvbeta.ResourceOfferFromRU(gspec.Resources), nil)
+	require.NoError(t, err)
+	suite.setupEscrowAccount(bid, order)
+	suite.makeBucket(volOrder)
+
+	_, err = suite.handler(suite.Context(), &mvbeta.MsgCreateLease{BidID: bid.ID})
+	require.ErrorIs(t, err, handler.ErrVolumeNotAttachable)
+}
+
+// makeBucket turns the given volume order's group into a bucket in place.
+func (st *testSuite) makeBucket(order mvbeta.Order) {
+	st.t.Helper()
+
+	group, found := st.DeploymentKeeper().GetGroup(st.Context(), order.ID.GroupID())
+	require.True(st.t, found)
+	group.GroupSpec.Volume.Access = dv1.VolumeAccessBucket
+	group.GroupSpec.Volume.MaxAttachments = 0
+	require.NoError(st.t, st.DeploymentKeeper().SaveGroup(st.Context(), group))
+}
+
 func TestCreateBidAttach_AttachmentLimit(t *testing.T) {
 	suite := setupTestSuite(t)
 	prepareBlanketMocks(suite)
