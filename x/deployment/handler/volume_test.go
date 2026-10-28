@@ -21,7 +21,7 @@ import (
 	mkeeper "pkg.akt.dev/node/v2/x/market/keeper"
 )
 
-// volumeMarket wraps the real market keeper, overriding the AEP-87 narrow
+// volumeMarket wraps the real market keeper, overriding the storage-market narrow
 // methods the market module implements in a later stage so the handler
 // gates can be exercised now.
 type volumeMarket struct {

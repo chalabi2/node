@@ -95,7 +95,7 @@ func (ms msgServer) CreateDeployment(goCtx context.Context, msg *types.MsgCreate
 		return nil, v1.ErrInvalidPrice.Wrapf("unsupported denomination %s", msg.Groups[0].Price().Denom)
 	}
 
-	// Volume groups run the AEP-87 stateful gates. ValidateDeploymentGroups
+	// Volume groups run the storage-market stateful gates. ValidateDeploymentGroups
 	// above already enforced the single-group invariant, so the volume
 	// group, when present, is the only group.
 	if msg.Groups[0].Volume != nil {
@@ -278,7 +278,7 @@ func (ms msgServer) PauseGroup(goCtx context.Context, msg *types.MsgPauseGroup) 
 	}
 
 	// Pausing a volume group closes its lease just like a close does, so it
-	// runs the same AEP-87 gates: attached compute detaches first, and no
+	// runs the same storage-market gates: attached compute detaches first, and no
 	// volume lease terminates without its reclamation window — the first
 	// pause starts the window (the group stays open), the pause completes at
 	// msg time after the deadline. The paused group stays live for the vid
@@ -338,7 +338,7 @@ func (ms msgServer) StartGroup(goCtx context.Context, msg *types.MsgStartGroup) 
 	return &types.MsgStartGroupResponse{}, nil
 }
 
-// validateVolumeCreate runs the AEP-87 stateful gates for creating a volume
+// validateVolumeCreate runs the storage-market stateful gates for creating a volume
 // group: the market feature flag, the params-bounded volume limits, the vid
 // gate, and the adoption / replica reference validation. Stateless shape
 // validation already ran in ValidateDeploymentGroups.

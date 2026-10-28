@@ -39,7 +39,7 @@ func initUpgrade(log log.Logger, app *apptypes.App) (utypes.IUpgrade, error) {
 	return up, nil
 }
 
-// StoreLoader adds no store keys: the AEP-87 volume indexes live under fresh
+// StoreLoader adds no store keys: the storage-market volume indexes live under fresh
 // prefixes of the existing deployment and market stores.
 func (up *upgrade) StoreLoader() *storetypes.StoreUpgrades {
 	return &storetypes.StoreUpgrades{
@@ -57,7 +57,7 @@ func (up *upgrade) UpgradeHandler() upgradetypes.UpgradeHandler {
 			return toVM, err
 		}
 
-		// Seed the AEP-87 deployment volume params. The stored params
+		// Seed the storage-market deployment volume params. The stored params
 		// decode with the volume fields zero; MaxVolumeSize == 0 marks
 		// them unseeded (Params.Validate rejects it).
 		dparams, err := up.Keepers.Akash.Deployment.GetParams(sctx)
@@ -74,7 +74,7 @@ func (up *upgrade) UpgradeHandler() upgradetypes.UpgradeHandler {
 			}
 		}
 
-		// Seed the AEP-87 market volume params and the lease resize params.
+		// Seed the market volume params and the lease resize params.
 		// Both features ship dark: VolumeOrdersEnabled and LeaseResizeEnabled
 		// stay false until governance flips them.
 		mparams, err := up.Keepers.Akash.Market.GetParams(sctx)
@@ -102,7 +102,7 @@ func (up *upgrade) UpgradeHandler() upgradetypes.UpgradeHandler {
 			}
 		}
 
-		// Initialize the AEP-87 volume indexes (deployment 0x13 vid index
+		// Initialize the storage-market volume indexes (deployment 0x13 vid index
 		// and replica backref counters, market 0x15/0x16 attachment
 		// indexes). No volume groups can exist before this upgrade, so
 		// both rebuilds write nothing; running them makes the empty

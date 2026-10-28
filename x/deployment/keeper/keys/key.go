@@ -15,7 +15,7 @@ var (
 	// Pending denom migration prefix
 	PendingDenomMigrationPrefix = []byte{0x13, 0x01}
 
-	// AEP-87 volume index prefixes. The design places the vid index under
+	// storage-market volume index prefixes. The design places the vid index under
 	// the 0x13 family; {0x13, 0x01} is already taken by the pending denom
 	// migration map on this fork, so the volume indexes take the next
 	// second bytes.

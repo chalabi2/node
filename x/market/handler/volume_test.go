@@ -35,7 +35,7 @@ func volumeProviderAttrs() attr.Attributes {
 	}
 }
 
-// enableVolumeOrders flips the AEP-87 feature flag on for the test.
+// enableVolumeOrders flips the storage-market feature flag on for the test.
 func (st *testSuite) enableVolumeOrders() mvbeta.Params {
 	st.t.Helper()
 

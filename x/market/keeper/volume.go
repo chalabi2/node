@@ -15,7 +15,7 @@ import (
 	"pkg.akt.dev/node/v2/x/market/keeper/keys"
 )
 
-// VolumeOrdersEnabled reports the AEP-87 feature flag gating volume-group
+// VolumeOrdersEnabled reports the storage-market feature flag gating volume-group
 // creation and volume bids.
 func (k Keeper) VolumeOrdersEnabled(ctx sdk.Context) bool {
 	params, err := k.GetParams(ctx)
@@ -450,7 +450,7 @@ func (k Keeper) RebuildAttachmentIndexes(ctx sdk.Context) error {
 // field, so those report no-anchor and the readers treat the dead volume as
 // expired: the vid is free to re-mint and adoption rejects. That is the
 // intended migration semantics for pre-upgrade closes — volume leases only
-// exist behind the AEP-87 feature flag the upgrade ships, so no real
+// exist behind the storage-market feature flag the upgrade ships, so no real
 // retention window predates the field and the upgrade needs no backfill.
 func (k Keeper) LastVolumeLeaseClosedAt(ctx sdk.Context, id dtypes.GroupID) (time.Time, bool) {
 	lease, found := k.lastClosedVolumeLease(ctx, id)

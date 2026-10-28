@@ -6,7 +6,7 @@ import (
 	mv1 "pkg.akt.dev/go/node/market/v1"
 )
 
-// AEP-87 volume error variants, registered in the market codespace.
+// storage-market volume error variants, registered in the market codespace.
 // Codes start at 100 to stay clear of the chain-sdk market/v1 range,
 // which owns the low codes and grows with it.
 var (

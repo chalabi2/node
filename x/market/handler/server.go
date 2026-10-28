@@ -120,7 +120,7 @@ func (ms msgServer) CreateBid(goCtx context.Context, msg *mvbeta.MsgCreateBid) (
 		}
 	}
 
-	// AEP-87 volume gates: a volume-group bid commits to the order's volume
+	// storage-market volume gates: a volume-group bid commits to the order's volume
 	// policy, the reclamation floor and exact storage quantities; an
 	// attaching-group bid is chain-gated to the volume's provider
 	// (colocation).
@@ -190,7 +190,7 @@ func (ms msgServer) CloseBid(goCtx context.Context, msg *mvbeta.MsgCloseBid) (*m
 		return nil, mv1.ErrBidNotActive
 	}
 
-	// AEP-87 carve-out: a volume lease closing under a migration/eviction
+	// storage-market carve-out: a volume lease closing under a migration/eviction
 	// reclamation keeps its group open and re-lists — the auto-re-order IS
 	// the migration. Terminal volume closes pause the group as usual and
 	// fire no re-order; adoption takes over.
@@ -269,7 +269,7 @@ func (ms msgServer) CreateLease(goCtx context.Context, msg *mvbeta.MsgCreateLeas
 		return &mvbeta.MsgCreateLeaseResponse{}, mv1.ErrGroupNotOpen
 	}
 
-	// AEP-87: re-verify the colocation contract and attachment bound for
+	// Storage market: re-verify the colocation contract and attachment bound for
 	// attaching groups — state may have moved between bid and lease. The
 	// keeper lease-create routine then writes the attachment index and
 	// emits EventVolumeAttached.
@@ -351,7 +351,7 @@ func (ms msgServer) CloseLease(goCtx context.Context, msg *mvbeta.MsgCloseLease)
 		return &mvbeta.MsgCloseLeaseResponse{}, mv1.ErrOrderClosed
 	}
 
-	// AEP-87: a tenant close of a volume lease routes through the
+	// Storage market: a tenant close of a volume lease routes through the
 	// reclamation window — the chain-enforced floor in both close
 	// directions. The first close enters LeaseReclaiming as a migration
 	// re-listing; the close completes at msg time after the deadline.
@@ -437,7 +437,7 @@ func (ms msgServer) LeaseStartReclaim(goCtx context.Context, msg *mvbeta.MsgLeas
 	return &mvbeta.MsgLeaseStartReclaimResponse{}, nil
 }
 
-// validateVolumeBid runs the AEP-87 gates for a bid on a volume-group order:
+// validateVolumeBid runs the storage-market gates for a bid on a volume-group order:
 // the feature flag (defense-in-depth; the order cannot exist without it), the
 // governance floor on the offered reclamation window — the provider's
 // on-chain retain-through-migration commitment — exact storage-quantity
@@ -498,7 +498,7 @@ func (ms msgServer) validateVolumeBid(ctx sdk.Context, params mvbeta.Params, ord
 	return nil
 }
 
-// validateAttachRefs runs the AEP-87 colocation contract for a bid or lease
+// validateAttachRefs runs the storage-market colocation contract for a bid or lease
 // on an attaching (compute) group: every referenced volume must resolve to a
 // volume group of the same tenant, hold an ACTIVE lease with this provider,
 // and have attachment headroom (an O(1) prefix count, not a lease scan).

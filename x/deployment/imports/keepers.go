@@ -18,7 +18,7 @@ import (
 )
 
 // MarketKeeper is the subset of the market keeper needed for denom migration
-// and the AEP-87 volume gates.
+// and the storage-market volume gates.
 type MarketKeeper interface {
 	CreateOrder(ctx sdk.Context, id dv1.GroupID, spec dvbeta.GroupSpec, reclamation *dv1.DeploymentReclamation) (mvbeta.Order, error)
 	GetParams(ctx sdk.Context) (mvbeta.Params, error)
@@ -32,7 +32,7 @@ type MarketKeeper interface {
 	// GetLeaseResize returns the deployment's pending lease resize, if any.
 	GetLeaseResize(ctx sdk.Context, id dv1.DeploymentID) (mvbeta.LeaseResize, bool)
 
-	// AEP-87 narrow volume additions.
+	// storage-market narrow volume additions.
 	//
 	// VolumeOrdersEnabled reports the market-module feature flag gating
 	// volume-group creation.

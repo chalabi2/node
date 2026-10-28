@@ -63,7 +63,7 @@ func InitGenesis(ctx sdk.Context, kpr keeper.IKeeper, data *dvbeta.GenesisState)
 		}
 	}
 
-	// The AEP-87 volume indexes (vid index, replica backref counters) are
+	// The storage-market volume indexes (vid index, replica backref counters) are
 	// pure functions of the groups; rebuild them instead of carrying them
 	// in the genesis document.
 	if err := kpr.RebuildVolumeIndexes(ctx); err != nil {

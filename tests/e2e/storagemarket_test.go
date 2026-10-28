@@ -1,4 +1,4 @@
-// Package e2e: AEP-87 decoupled storage market — fast, k8s-free chain e2e
+// Package e2e: decoupled storage market — fast, k8s-free chain e2e
 // suite (IMPLEMENTATION.md §8.1).
 //
 // Unlike the x/deployment and x/market handler tests (which stub the
@@ -94,7 +94,7 @@ func setupStorageMarketSuite(t *testing.T) *smSuite {
 	return s
 }
 
-// enableVolumeOrders flips the AEP-87 governance feature flag on.
+// enableVolumeOrders flips the storage-market governance feature flag on.
 func (s *smSuite) enableVolumeOrders() {
 	s.t.Helper()
 

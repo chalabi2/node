@@ -81,7 +81,7 @@ type Keeper struct {
 	leases *collections.IndexedMap[keys.LeasePrimaryKey, mv1.Lease, LeaseIndexes]
 	Params collections.Item[types.Params]
 
-	// AEP-87 volume attachment indexes: which compute leases mount which
+	// storage-market volume attachment indexes: which compute leases mount which
 	// volume groups. Written/pruned ONLY inside the keeper create/close
 	// routines (never handlers) so every close path — tenant, provider,
 	// escrow cascade — maintains them.
@@ -303,7 +303,7 @@ func (k Keeper) CreateLease(ctx sdk.Context, bid types.Bid) error {
 		return err
 	}
 
-	// AEP-87: an attaching-group lease registers in the volume attachment
+	// Storage market: an attaching-group lease registers in the volume attachment
 	// index at the single keeper create point.
 	if err := k.attachVolumesOnLeaseCreate(ctx, lease.ID); err != nil {
 		return err
@@ -384,7 +384,7 @@ func (k Keeper) OnOrderClosed(ctx sdk.Context, order types.Order) error {
 
 // OnLeaseClosed updates lease state to closed. It is the single point every
 // close path — tenant, provider, escrow cascade — funnels through, so the
-// AEP-87 volume attachment index is maintained here: a closing volume lease
+// storage-market volume attachment index is maintained here: a closing volume lease
 // first cascade-detaches its attached compute leases and records the
 // substituted volume close reason; a closing compute lease prunes its own
 // attachment entries and emits EventVolumeDetached.
@@ -412,7 +412,7 @@ func (k Keeper) OnLeaseClosed(ctx sdk.Context, lease mv1.Lease, state mv1.Lease_
 
 	lease.State = state
 	lease.ClosedOn = ctx.BlockHeight()
-	// ClosedAt is the wall-clock anchor of the AEP-87 volume retention
+	// ClosedAt is the wall-clock anchor of the storage-market volume retention
 	// window. Written on every close path (this is the single close funnel);
 	// zero on leases closed before the field existed, which the retention
 	// readers treat as no-anchor (expired).
