@@ -42,7 +42,7 @@ func runwayEvents(t *testing.T, ctx sdk.Context) []ev1.EventAccountRunway {
 	return out
 }
 
-func setupRunwayAccount(t *testing.T, ssuite *state.TestSuite, deposit int64, rates ...int64) escrowid.Account {
+func setupRunwayAccount(t *testing.T, ssuite *state.TestSuite, deposit int64, rates ...int64) (escrowid.Account, []escrowid.Payment) {
 	t.Helper()
 
 	ctx := ssuite.Context()
@@ -62,19 +62,23 @@ func setupRunwayAccount(t *testing.T, ssuite *state.TestSuite, deposit int64, ra
 		Balance: sdk.NewDecCoinFromCoin(amt),
 	}}))
 
+	pids := make([]escrowid.Payment, 0, len(rates))
+
 	for idx, rate := range rates {
 		plid := lid
 		plid.GSeq = uint32(idx + 1) // nolint: gosec
+		pid := plid.ToEscrowPaymentID()
 		powner := testutil.AccAddress(t)
 		require.NoError(t, ekeeper.PaymentCreate(
 			ctx,
-			plid.ToEscrowPaymentID(),
+			pid,
 			powner,
 			sdk.NewDecCoinFromCoin(sdk.NewCoin("uact", sdkmath.NewInt(rate))),
 		))
+		pids = append(pids, pid)
 	}
 
-	return aid
+	return aid, pids
 }
 
 // Test_AccountSettle_EmitsRunwayEvent asserts that settling an account with
@@ -83,7 +87,7 @@ func setupRunwayAccount(t *testing.T, ssuite *state.TestSuite, deposit int64, ra
 func Test_AccountSettle_EmitsRunwayEvent(t *testing.T) {
 	ssuite := state.SetupTestSuite(t)
 	// deposit 1000, rates 10 + 20 = 30 per block
-	aid := setupRunwayAccount(t, ssuite, 1000, 10, 20)
+	aid, _ := setupRunwayAccount(t, ssuite, 1000, 10, 20)
 
 	ctx := ssuite.Context().WithBlockHeight(ssuite.Context().BlockHeight() + 10)
 
@@ -103,7 +107,7 @@ func Test_AccountSettle_EmitsRunwayEvent(t *testing.T) {
 func Test_AccountSettle_RunwayZeroWhenNoFullBlock(t *testing.T) {
 	ssuite := state.SetupTestSuite(t)
 	// deposit 1000, rate 30 per block
-	aid := setupRunwayAccount(t, ssuite, 1000, 30)
+	aid, _ := setupRunwayAccount(t, ssuite, 1000, 30)
 
 	// 33 blocks x 30 = 990 transferred -> 10 left < 30
 	ctx := ssuite.Context().WithBlockHeight(ssuite.Context().BlockHeight() + 33)
@@ -125,7 +129,7 @@ func Test_AccountSettle_NoRunwayEventWhenOverdrawn(t *testing.T) {
 	ssuite := state.SetupTestSuite(t)
 	bkeeper := ssuite.BankKeeper()
 	// deposit 100, rate 30 per block: 10 blocks owe 300 -> overdrawn
-	aid := setupRunwayAccount(t, ssuite, 100, 30)
+	aid, _ := setupRunwayAccount(t, ssuite, 100, 30)
 
 	bkeeper.
 		On("SendCoinsFromModuleToModule", mock.Anything, module.ModuleName, mock.MatchedBy(func(dest string) bool {
