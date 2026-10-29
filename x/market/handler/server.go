@@ -190,13 +190,19 @@ func (ms msgServer) CloseBid(goCtx context.Context, msg *mvbeta.MsgCloseBid) (*m
 		return nil, mv1.ErrBidNotActive
 	}
 
-	// storage-market carve-out: a volume lease closing under a migration/eviction
-	// reclamation keeps its group open and re-lists — the auto-re-order IS
-	// the migration. Terminal volume closes pause the group as usual and
-	// fire no re-order; adoption takes over.
-	reorder := order.Spec.Volume != nil && lease.Reclamation != nil &&
-		(lease.Reclamation.Reason == mv1.LeaseClosedReasonVolumeMigrate ||
-			lease.Reclamation.Reason == mv1.LeaseClosedReasonVolumeEvict)
+	// storage-market carve-out: a volume lease closes under the reason its
+	// reclamation ran with, whatever reason the close carries. A tenant's
+	// move and every provider reclaim keep the group open and re-list it:
+	// the auto-re-order IS the move. Only the tenant's own close of the
+	// volume pauses the group as usual, without a re-order, until the
+	// tenant's second close ends it; adoption takes over from there.
+	reason := msg.Reason
+	reorder := false
+
+	if order.Spec.Volume != nil {
+		reason = volumeReclaimReason(lease)
+		reorder = reason != mv1.LeaseClosedReasonVolumeClosedRetain
+	}
 
 	if !reorder {
 		if err := ms.keepers.Deployment.OnBidClosed(ctx, order.ID.GroupID()); err != nil {
@@ -204,7 +210,7 @@ func (ms msgServer) CloseBid(goCtx context.Context, msg *mvbeta.MsgCloseBid) (*m
 		}
 	}
 
-	_ = ms.keepers.Market.OnLeaseClosed(ctx, lease, mv1.LeaseClosed, msg.Reason)
+	_ = ms.keepers.Market.OnLeaseClosed(ctx, lease, mv1.LeaseClosed, reason)
 	_ = ms.keepers.Market.OnBidClosed(ctx, bid)
 	_ = ms.keepers.Market.OnOrderClosed(ctx, order)
 
@@ -410,12 +416,22 @@ func (ms msgServer) LeaseStartReclaim(goCtx context.Context, msg *mvbeta.MsgLeas
 		return nil, mv1.ErrLeaseAlreadyReclaiming
 	}
 
+	// A provider that gives up a volume lease evicts the volume: the group
+	// re-lists when the window ends and the next provider copies the data
+	// from this one. The reclaim is recorded and announced as volume_evict
+	// whatever reason it carries, since storage operators start the export
+	// on that reason and a move's destination looks for its source by it.
+	reason := msg.Reason
+	if order, found := ms.keepers.Market.GetOrder(ctx, msg.ID.OrderID()); found && order.Spec.Volume != nil {
+		reason = mv1.LeaseClosedReasonVolumeEvict
+	}
+
 	blockTime := ctx.BlockTime()
 	deadline := blockTime.Add(lease.Reclamation.Window)
 
 	lease.Reclamation.StartedAt = ctx.BlockHeight()
 	lease.Reclamation.Deadline = deadline.Unix()
-	lease.Reclamation.Reason = msg.Reason
+	lease.Reclamation.Reason = reason
 	lease.State = mv1.LeaseReclaiming
 
 	if err := ms.keepers.Market.SaveLease(ctx, lease); err != nil {
@@ -428,13 +444,28 @@ func (ms msgServer) LeaseStartReclaim(goCtx context.Context, msg *mvbeta.MsgLeas
 
 	if err := ctx.EventManager().EmitTypedEvent(&mv1.EventLeaseReclaimStarted{
 		ID:       lease.ID,
-		Reason:   msg.Reason,
+		Reason:   reason,
 		Deadline: deadline.Unix(),
 	}); err != nil {
 		return nil, err
 	}
 
 	return &mvbeta.MsgLeaseStartReclaimResponse{}, nil
+}
+
+// volumeReclaimReason is the reason a volume lease in reclamation closes
+// under when its provider closes it: a tenant's move or close keeps the
+// reason the tenant started the window with, and anything else is the
+// provider's eviction.
+func volumeReclaimReason(lease mv1.Lease) mv1.LeaseClosedReason {
+	if lease.Reclamation != nil {
+		switch lease.Reclamation.Reason {
+		case mv1.LeaseClosedReasonVolumeMigrate, mv1.LeaseClosedReasonVolumeClosedRetain:
+			return lease.Reclamation.Reason
+		}
+	}
+
+	return mv1.LeaseClosedReasonVolumeEvict
 }
 
 // validateVolumeBid runs the storage-market gates for a bid on a volume-group order:

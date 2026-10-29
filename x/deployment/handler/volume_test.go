@@ -12,6 +12,7 @@ import (
 
 	"pkg.akt.dev/go/node/deployment/v1"
 	dvbeta "pkg.akt.dev/go/node/deployment/v1beta4"
+	mv1 "pkg.akt.dev/go/node/market/v1"
 	deposit "pkg.akt.dev/go/node/types/deposit/v1"
 	rtypes "pkg.akt.dev/go/node/types/resources/v1beta4"
 	"pkg.akt.dev/go/node/types/unit"
@@ -542,10 +543,10 @@ func TestVolumeCloseWhileAttached(t *testing.T) {
 	})
 
 	t.Run("pause group rejected", func(t *testing.T) {
-		// pausing closes the volume lease too, so it runs the same gate
+		// a volume is never paused, attached or not
 		res, err := vs.vhandler(vs.ctx, &dvbeta.MsgPauseGroup{ID: volumeGroupID(msg)})
 		require.Nil(t, res)
-		require.True(t, errors.Is(err, v1.ErrVolumeAttached))
+		require.ErrorIs(t, err, v1.ErrVolumeNotPausable)
 	})
 
 	t.Run("close passes once detached", func(t *testing.T) {
@@ -554,5 +555,79 @@ func TestVolumeCloseWhileAttached(t *testing.T) {
 		res, err := vs.vhandler(vs.ctx, &dvbeta.MsgCloseDeployment{ID: msg.ID})
 		require.NoError(t, err)
 		require.NotNil(t, res)
+	})
+}
+
+func TestVolumePauseAndStartRejected(t *testing.T) {
+	vs := setupVolumeTestSuite(t)
+
+	// createVolume creates a volume group whose first order is closed, as
+	// after its lease closed without a re-listing.
+	createVolume := func(t *testing.T, vid string) dvbeta.Group {
+		t.Helper()
+
+		msg := vs.createVolumeMsg(t, vid)
+		_, err := vs.vhandler(vs.ctx, msg)
+		require.NoError(t, err)
+
+		order, found := vs.mkeeper.GetOrder(vs.ctx, mv1.MakeOrderID(volumeGroupID(msg), 1))
+		require.True(t, found)
+		require.NoError(t, vs.mkeeper.OnOrderClosed(vs.ctx, order))
+
+		group, found := vs.dkeeper.GetGroup(vs.ctx, volumeGroupID(msg))
+		require.True(t, found)
+
+		return group
+	}
+
+	requireNoOrder := func(t *testing.T, gid v1.GroupID) {
+		t.Helper()
+
+		_, found := vs.mkeeper.GetOrder(vs.ctx, mv1.MakeOrderID(gid, 2))
+		require.False(t, found, "the volume group must not list a fresh order")
+	}
+
+	t.Run("pause rejected", func(t *testing.T) {
+		msg := vs.createVolumeMsg(t, "pg-open")
+		_, err := vs.vhandler(vs.ctx, msg)
+		require.NoError(t, err)
+
+		res, err := vs.vhandler(vs.ctx, &dvbeta.MsgPauseGroup{ID: volumeGroupID(msg)})
+		require.Nil(t, res)
+		require.ErrorIs(t, err, v1.ErrVolumeNotPausable)
+
+		group, found := vs.dkeeper.GetGroup(vs.ctx, volumeGroupID(msg))
+		require.True(t, found)
+		require.Equal(t, dvbeta.GroupOpen, group.State)
+	})
+
+	t.Run("start of a paused volume rejected", func(t *testing.T) {
+		// a provider closing the lease at the end of the tenant's own close
+		// leaves the group paused
+		group := createVolume(t, "pg-paused")
+		require.NoError(t, vs.dkeeper.OnPauseGroup(vs.ctx, group))
+
+		res, err := vs.vhandler(vs.ctx, &dvbeta.MsgStartGroup{ID: group.ID})
+		require.Nil(t, res)
+		require.ErrorIs(t, err, v1.ErrVolumeNotPausable)
+
+		group, found := vs.dkeeper.GetGroup(vs.ctx, group.ID)
+		require.True(t, found)
+		require.Equal(t, dvbeta.GroupPaused, group.State)
+		requireNoOrder(t, group.ID)
+	})
+
+	t.Run("start of an unfunded volume rejected", func(t *testing.T) {
+		group := createVolume(t, "pg-unfunded")
+		require.NoError(t, vs.dkeeper.OnCloseGroup(vs.ctx, group, dvbeta.GroupInsufficientFunds))
+
+		res, err := vs.vhandler(vs.ctx, &dvbeta.MsgStartGroup{ID: group.ID})
+		require.Nil(t, res)
+		require.ErrorIs(t, err, v1.ErrVolumeNotPausable)
+
+		group, found := vs.dkeeper.GetGroup(vs.ctx, group.ID)
+		require.True(t, found)
+		require.Equal(t, dvbeta.GroupInsufficientFunds, group.State)
+		requireNoOrder(t, group.ID)
 	})
 }

@@ -856,7 +856,7 @@ func TestCloseDeployment_VolumeAttachedRejected(t *testing.T) {
 	require.Contains(t, err.Error(), "volume has attached leases")
 }
 
-func TestPauseGroup_VolumeRoutesThroughReclamation(t *testing.T) {
+func TestPauseGroup_VolumeRejected(t *testing.T) {
 	suite := setupTestSuite(t)
 	prepareBlanketMocks(suite)
 	suite.enableVolumeOrders()
@@ -866,14 +866,10 @@ func TestPauseGroup_VolumeRoutesThroughReclamation(t *testing.T) {
 	volGid := volOrder.ID.GroupID()
 	suite.setupLeaseEscrow(volBid, volOrder)
 
-	blockTime := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
-	suite.SetBlockHeight(100)
-	ctx := suite.Context().WithBlockTime(blockTime)
-
-	// First pause starts reclamation and leaves the group open — a pause
-	// closes the volume lease just like a close, so the window applies.
-	_, err := suite.dhandler(ctx, &dtypes.MsgPauseGroup{ID: volGid})
-	require.NoError(t, err)
+	// A tenant closes a volume or moves it; a pause is refused and starts
+	// no reclamation.
+	_, err := suite.dhandler(suite.Context(), &dtypes.MsgPauseGroup{ID: volGid})
+	require.ErrorIs(t, err, dv1.ErrVolumeNotPausable)
 
 	group, found := suite.DeploymentKeeper().GetGroup(suite.Context(), volGid)
 	require.True(t, found)
@@ -881,37 +877,8 @@ func TestPauseGroup_VolumeRoutesThroughReclamation(t *testing.T) {
 
 	lease, found := suite.MarketKeeper().GetLease(suite.Context(), volLid)
 	require.True(t, found)
-	require.Equal(t, mv1.LeaseReclaiming, lease.State)
-	assert.Equal(t, mv1.LeaseClosedReasonVolumeClosedRetain, lease.Reclamation.Reason)
-
-	// Inside the window the pause is refused.
-	early := suite.Context().WithBlockTime(blockTime.Add(time.Hour))
-	_, err = suite.dhandler(early, &dtypes.MsgPauseGroup{ID: volGid})
-	require.ErrorIs(t, err, mv1.ErrReclamationWindowNotElapsed)
-
-	// After the deadline the pause completes: the group pauses and the
-	// lease closes with the substituted retain reason, anchoring retention
-	// at this block's wall clock.
-	lateTime := blockTime.Add(25 * time.Hour)
-	late := suite.Context().WithBlockTime(lateTime)
-	_, err = suite.dhandler(late, &dtypes.MsgPauseGroup{ID: volGid})
-	require.NoError(t, err)
-
-	group, found = suite.DeploymentKeeper().GetGroup(suite.Context(), volGid)
-	require.True(t, found)
-	assert.Equal(t, dtypes.GroupPaused, group.State)
-
-	lease, found = suite.MarketKeeper().GetLease(suite.Context(), volLid)
-	require.True(t, found)
-	assert.Equal(t, mv1.LeaseClosed, lease.State)
-	assert.Equal(t, mv1.LeaseClosedReasonVolumeClosedRetain, lease.Reason)
-	assert.Equal(t, lateTime.Unix(), lease.ClosedAt)
-
-	// The pause-close is the retention anchor the vid gate and adoption
-	// validation read.
-	closedAt, ok := suite.MarketKeeper().LastVolumeLeaseClosedAt(suite.Context(), volGid)
-	require.True(t, ok)
-	assert.Equal(t, lateTime.Unix(), closedAt.Unix())
+	assert.Equal(t, mv1.LeaseActive, lease.State)
+	assert.Zero(t, lease.Reclamation.StartedAt)
 }
 
 func TestPauseGroup_VolumeAttachedRejected(t *testing.T) {
@@ -926,8 +893,121 @@ func TestPauseGroup_VolumeAttachedRejected(t *testing.T) {
 	suite.attachCompute(volOrder, providerAddr)
 
 	_, err := suite.dhandler(suite.Context(), &dtypes.MsgPauseGroup{ID: volOrder.ID.GroupID()})
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "volume has attached leases")
+	require.ErrorIs(t, err, dv1.ErrVolumeNotPausable)
+}
+
+// ===========================
+// Provider reclaim always re-lists
+// ===========================
+
+func TestLeaseStartReclaim_VolumeEvicts(t *testing.T) {
+	for _, reason := range []mv1.LeaseClosedReason{
+		mv1.LeaseClosedReasonUnstable,
+		mv1.LeaseClosedReasonDecommissioned,
+		mv1.LeaseClosedReasonUnspecified,
+		mv1.LeaseClosedReasonManifestTimeout,
+		mv1.LeaseClosedReasonVolumeEvict,
+	} {
+		t.Run(reason.String(), func(t *testing.T) {
+			suite := setupTestSuite(t)
+			prepareBlanketMocks(suite)
+			suite.enableVolumeOrders()
+
+			providerAddr := testutil.AccAddress(t)
+			volLid, volBid, volOrder, _ := suite.createVolumeLease("pgdata", providerAddr, 24*time.Hour)
+			volGid := volOrder.ID.GroupID()
+			suite.setupLeaseEscrow(volBid, volOrder)
+
+			blockTime := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
+			ctx := suite.Context().WithBlockTime(blockTime)
+
+			// whatever reason the provider gives, giving up a volume lease
+			// is recorded and announced as an eviction
+			res, err := suite.handler(ctx, &mvbeta.MsgLeaseStartReclaim{ID: volLid, Reason: reason})
+			require.NoError(t, err)
+
+			lease, found := suite.MarketKeeper().GetLease(suite.Context(), volLid)
+			require.True(t, found)
+			assert.Equal(t, mv1.LeaseReclaiming, lease.State)
+			assert.Equal(t, mv1.LeaseClosedReasonVolumeEvict, lease.Reclamation.Reason)
+
+			testutil.EnsureEvent(t, res.Events, &mv1.EventLeaseReclaimStarted{
+				ID:       volLid,
+				Reason:   mv1.LeaseClosedReasonVolumeEvict,
+				Deadline: blockTime.Add(24 * time.Hour).Unix(),
+			})
+
+			// past the deadline the provider's close re-lists the volume
+			// instead of pausing its group
+			late := suite.Context().WithBlockTime(blockTime.Add(25 * time.Hour))
+			_, err = suite.handler(late, &mvbeta.MsgCloseBid{ID: volBid.ID, Reason: mv1.LeaseClosedReasonDecommissioned})
+			require.NoError(t, err)
+
+			lease, found = suite.MarketKeeper().GetLease(suite.Context(), volLid)
+			require.True(t, found)
+			assert.Equal(t, mv1.LeaseClosed, lease.State)
+			assert.Equal(t, mv1.LeaseClosedReasonVolumeEvict, lease.Reason)
+
+			group, found := suite.DeploymentKeeper().GetGroup(suite.Context(), volGid)
+			require.True(t, found)
+			assert.Equal(t, dtypes.GroupOpen, group.State)
+			assert.True(t, suite.hasOpenOrder(volGid, 2), "volume group must re-list")
+		})
+	}
+}
+
+func TestCloseBid_VolumeTenantCloseDoesNotRelist(t *testing.T) {
+	suite := setupTestSuite(t)
+	prepareBlanketMocks(suite)
+	suite.enableVolumeOrders()
+
+	providerAddr := testutil.AccAddress(t)
+	volLid, volBid, volOrder, _ := suite.createVolumeLease("pgdata", providerAddr, 24*time.Hour)
+	volGid := volOrder.ID.GroupID()
+	did := volGid.DeploymentID()
+	suite.setupLeaseEscrow(volBid, volOrder)
+
+	blockTime := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
+	ctx := suite.Context().WithBlockTime(blockTime)
+
+	// The tenant's first close starts the window.
+	_, err := suite.dhandler(ctx, &dtypes.MsgCloseDeployment{ID: did})
+	require.NoError(t, err)
+
+	// Past the deadline the provider closes the lease before the tenant's
+	// second close, naming an eviction of its own.
+	late := suite.Context().WithBlockTime(blockTime.Add(25 * time.Hour))
+	_, err = suite.handler(late, &mvbeta.MsgCloseBid{ID: volBid.ID, Reason: mv1.LeaseClosedReasonVolumeEvict})
+	require.NoError(t, err)
+
+	// The lease records the tenant's close and the volume does not re-list:
+	// the group waits, paused, for the tenant's second close.
+	lease, found := suite.MarketKeeper().GetLease(suite.Context(), volLid)
+	require.True(t, found)
+	assert.Equal(t, mv1.LeaseClosed, lease.State)
+	assert.Equal(t, mv1.LeaseClosedReasonVolumeClosedRetain, lease.Reason)
+
+	group, found := suite.DeploymentKeeper().GetGroup(suite.Context(), volGid)
+	require.True(t, found)
+	assert.Equal(t, dtypes.GroupPaused, group.State)
+	assert.False(t, suite.hasOpenOrder(volGid, 2), "a closing volume must not re-list")
+
+	// Starting it would list an order any provider could win empty.
+	_, err = suite.dhandler(late, &dtypes.MsgStartGroup{ID: volGid})
+	require.ErrorIs(t, err, dv1.ErrVolumeNotPausable)
+	assert.False(t, suite.hasOpenOrder(volGid, 2))
+
+	// The tenant's second close ends the volume.
+	_, err = suite.dhandler(late, &dtypes.MsgCloseDeployment{ID: did})
+	require.NoError(t, err)
+
+	group, found = suite.DeploymentKeeper().GetGroup(suite.Context(), volGid)
+	require.True(t, found)
+	assert.Equal(t, dtypes.GroupClosed, group.State)
+
+	deployment, found := suite.DeploymentKeeper().GetDeployment(suite.Context(), did)
+	require.True(t, found)
+	assert.Equal(t, dv1.DeploymentClosed, deployment.State)
 }
 
 // ===========================
