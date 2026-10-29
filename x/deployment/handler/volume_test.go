@@ -631,3 +631,36 @@ func TestVolumePauseAndStartRejected(t *testing.T) {
 		requireNoOrder(t, group.ID)
 	})
 }
+
+func TestVolumeCloseOfEndedVolumeSucceeds(t *testing.T) {
+	vs := setupVolumeTestSuite(t)
+
+	// with no lease to wait out, the first close ends the volume at once
+	msg := vs.createVolumeMsg(t, "pg-data")
+	_, err := vs.vhandler(vs.ctx, msg)
+	require.NoError(t, err)
+	_, err = vs.vhandler(vs.ctx, &dvbeta.MsgCloseDeployment{ID: msg.ID})
+	require.NoError(t, err)
+
+	group, found := vs.dkeeper.GetGroup(vs.ctx, volumeGroupID(msg))
+	require.True(t, found)
+	require.Equal(t, dvbeta.GroupClosed, group.State)
+
+	// a close that finds the volume already ended, as its provider may leave
+	// it, succeeds and changes nothing
+	res, err := vs.vhandler(vs.ctx, &dvbeta.MsgCloseDeployment{ID: msg.ID})
+	require.NoError(t, err)
+	require.NotNil(t, res)
+
+	res, err = vs.vhandler(vs.ctx, &dvbeta.MsgCloseGroup{ID: volumeGroupID(msg)})
+	require.NoError(t, err)
+	require.NotNil(t, res)
+
+	deployment, found := vs.dkeeper.GetDeployment(vs.ctx, msg.ID)
+	require.True(t, found)
+	require.Equal(t, v1.DeploymentClosed, deployment.State)
+
+	group, found = vs.dkeeper.GetGroup(vs.ctx, volumeGroupID(msg))
+	require.True(t, found)
+	require.Equal(t, dvbeta.GroupClosed, group.State)
+}

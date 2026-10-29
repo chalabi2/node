@@ -8,6 +8,7 @@ import (
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	govtypes "github.com/cosmos/cosmos-sdk/x/gov/types"
 	atypes "pkg.akt.dev/go/node/audit/v1"
+	dv1 "pkg.akt.dev/go/node/deployment/v1"
 	dbeta "pkg.akt.dev/go/node/deployment/v1beta4"
 	mv1 "pkg.akt.dev/go/node/market/v1"
 	mvbeta "pkg.akt.dev/go/node/market/v1beta5"
@@ -191,23 +192,24 @@ func (ms msgServer) CloseBid(goCtx context.Context, msg *mvbeta.MsgCloseBid) (*m
 	}
 
 	// storage-market carve-out: a volume lease closes under the reason its
-	// reclamation ran with, whatever reason the close carries. A tenant's
-	// move and every provider reclaim keep the group open and re-list it:
-	// the auto-re-order IS the move. Only the tenant's own close of the
-	// volume pauses the group as usual, without a re-order, until the
-	// tenant's second close ends it; adoption takes over from there.
+	// reclamation ran with, whatever reason the close carries, and never
+	// pauses its group. A tenant's move and every provider reclaim keep the
+	// group open and re-list it: the auto-re-order IS the move. A tenant's
+	// close of the volume ends here as the tenant's completing close would
+	// end it; adoption takes over from there.
 	reason := msg.Reason
 	reorder := false
+	closing := false
+	groupOnly := false
 
 	if order.Spec.Volume != nil {
 		reason = volumeReclaimReason(lease)
-		reorder = reason != mv1.LeaseClosedReasonVolumeClosedRetain
-	}
-
-	if !reorder {
-		if err := ms.keepers.Deployment.OnBidClosed(ctx, order.ID.GroupID()); err != nil {
-			return nil, err
-		}
+		closing = reason == mv1.LeaseClosedReasonVolumeClosedRetain
+		reorder = !closing
+		// read before the lease close drops it
+		groupOnly = closing && ms.keepers.Market.VolumeGroupClose(ctx, lease.ID)
+	} else if err := ms.keepers.Deployment.OnBidClosed(ctx, order.ID.GroupID()); err != nil {
+		return nil, err
 	}
 
 	_ = ms.keepers.Market.OnLeaseClosed(ctx, lease, mv1.LeaseClosed, reason)
@@ -225,9 +227,44 @@ func (ms msgServer) CloseBid(goCtx context.Context, msg *mvbeta.MsgCloseBid) (*m
 		}
 	}
 
+	if closing {
+		if err := ms.finishVolumeClose(ctx, order.ID.GroupID(), groupOnly); err != nil {
+			return &mvbeta.MsgCloseBidResponse{}, err
+		}
+	}
+
 	telemetry.IncrCounter(1.0, "akash.order_closed")
 
 	return &mvbeta.MsgCloseBidResponse{}, nil
+}
+
+// finishVolumeClose ends a volume whose lease its provider closed when the
+// window of the tenant's close ran out, exactly as the tenant's completing
+// close would have: the group closes, and with it the deployment and its
+// escrow account, unless the tenant closed the group alone. Otherwise a
+// tenant who never sends that close would leave the vid held by a live group
+// long after the provider released the data, and the volume unadoptable.
+func (ms msgServer) finishVolumeClose(ctx sdk.Context, gid dv1.GroupID, groupOnly bool) error {
+	if !groupOnly {
+		deployment, found := ms.keepers.Deployment.GetDeployment(ctx, gid.DeploymentID())
+		if !found || deployment.State != dv1.DeploymentActive {
+			return nil
+		}
+
+		// the escrow hooks close the deployment and its group
+		return ms.keepers.Escrow.AccountClose(ctx, deployment.ID.ToEscrowAccountID())
+	}
+
+	group, found := ms.keepers.Deployment.GetGroup(ctx, gid)
+	if !found || group.ValidateClosable() != nil {
+		return nil
+	}
+
+	if err := ms.keepers.Deployment.OnCloseGroup(ctx, group, dbeta.GroupClosed); err != nil {
+		return err
+	}
+
+	return ms.keepers.Market.OnGroupClosed(ctx, gid, dbeta.GroupClosed)
 }
 
 func (ms msgServer) WithdrawLease(goCtx context.Context, msg *mvbeta.MsgWithdrawLease) (*mvbeta.MsgWithdrawLeaseResponse, error) {

@@ -44,6 +44,7 @@ type AuditKeeper interface {
 type DeploymentKeeper interface {
 	GetGroup(ctx sdk.Context, id dtypes.GroupID) (dbeta.Group, bool)
 	OnBidClosed(ctx sdk.Context, id dtypes.GroupID) error
+	OnCloseGroup(ctx sdk.Context, group dbeta.Group, state dbeta.Group_State) error
 	OnLeaseClosed(ctx sdk.Context, id dtypes.GroupID) (dbeta.Group, error)
 	GetDeployment(ctx sdk.Context, id dtypes.DeploymentID) (dtypes.Deployment, bool)
 	UpdateDeployment(ctx sdk.Context, deployment dtypes.Deployment) error

@@ -47,6 +47,10 @@ type MarketKeeper interface {
 	// inside) LeaseReclaiming and the close completes at msg time after
 	// the deadline.
 	ReclaimVolumeOnClose(ctx sdk.Context, id dv1.GroupID, reason mv1.LeaseClosedReason) (bool, error)
+	// MarkVolumeGroupClose records that the tenant's close just started on
+	// the volume group's lease ends the group alone, so a provider that
+	// closes the lease when the window ends leaves the deployment open.
+	MarkVolumeGroupClose(ctx sdk.Context, id dv1.GroupID) error
 	// LastVolumeLeaseClosedAt returns the block time at which the volume
 	// group's most recent closed lease was closed — the anchor of the
 	// post-close retention window — or false when no closed lease is

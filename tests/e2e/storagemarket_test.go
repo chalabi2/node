@@ -33,6 +33,7 @@ import (
 
 	dv1 "pkg.akt.dev/go/node/deployment/v1"
 	dvbeta "pkg.akt.dev/go/node/deployment/v1beta4"
+	etypes "pkg.akt.dev/go/node/escrow/types/v1"
 	ev1 "pkg.akt.dev/go/node/escrow/v1"
 	mv1 "pkg.akt.dev/go/node/market/v1"
 	mvbeta "pkg.akt.dev/go/node/market/v1beta5"
@@ -784,63 +785,184 @@ func TestStorageMarketE2E_StartVolumeGroupRejected(t *testing.T) {
 	s := setupStorageMarketSuite(t)
 	s.enableVolumeOrders()
 
+	// A deposit tiny next to the volume's 1uact/block lease, so the volume
+	// runs out of funds.
+	dparams, err := s.DeploymentKeeper().GetParams(s.Context())
+	require.NoError(t, err)
+	dparams.MinDeposits = sdk.Coins{
+		sdk.NewInt64Coin(sdkutil.DenomUakt, 1000),
+		sdk.NewInt64Coin(sdkutil.DenomUact, 1000),
+	}
+	require.NoError(t, s.DeploymentKeeper().SetParams(s.Context(), dparams))
+
+	owner := testutil.AccAddress(t).String()
+	provider := s.createProvider(smVolumeProviderAttrs())
+
+	_, volOrder := s.fullVolumeLease(owner, "pg-data", provider, sdk.NewInt64Coin(sdkutil.DenomUact, 1000))
+	volGid := volOrder.ID.GroupID()
+
+	s.SetBlockHeight(s.Context().BlockHeight() + 5000)
+	_, err = s.EscrowKeeper().AccountSettle(s.Context(), volGid.DeploymentID().ToEscrowAccountID())
+	require.NoError(t, err)
+
+	group, found := s.DeploymentKeeper().GetGroup(s.Context(), volGid)
+	require.True(t, found)
+	require.Equal(t, dvbeta.GroupInsufficientFunds, group.State)
+
+	// Starting the unfunded volume again would list an order any provider
+	// could win with an empty volume while this provider still holds the
+	// data.
+	_, err = s.dhandler(s.Context(), &dvbeta.MsgStartGroup{ID: volGid})
+	require.ErrorIs(t, err, dv1.ErrVolumeNotPausable)
+
+	group, found = s.DeploymentKeeper().GetGroup(s.Context(), volGid)
+	require.True(t, found)
+	require.Equal(t, dvbeta.GroupInsufficientFunds, group.State)
+	assert.False(t, s.hasOpenOrder(volGid, 2))
+}
+
+// ===========================
+// Either side finishes a tenant's close of a volume
+// ===========================
+
+// volumeEnd is what a tenant's close of a volume leaves behind.
+type volumeEnd struct {
+	Deployment dv1.Deployment_State
+	Group      dvbeta.Group_State
+	Account    etypes.State
+	Lease      mv1.Lease_State
+	Reason     mv1.LeaseClosedReason
+	Relisted   bool
+}
+
+func (s *smSuite) volumeEnd(lid mv1.LeaseID) volumeEnd {
+	s.t.Helper()
+
+	deployment, found := s.DeploymentKeeper().GetDeployment(s.Context(), lid.DeploymentID())
+	require.True(s.t, found)
+
+	group, found := s.DeploymentKeeper().GetGroup(s.Context(), lid.GroupID())
+	require.True(s.t, found)
+
+	account, err := s.EscrowKeeper().GetAccount(s.Context(), lid.DeploymentID().ToEscrowAccountID())
+	require.NoError(s.t, err)
+
+	lease, found := s.MarketKeeper().GetLease(s.Context(), lid)
+	require.True(s.t, found)
+
+	return volumeEnd{
+		Deployment: deployment.State,
+		Group:      group.State,
+		Account:    account.State.State,
+		Lease:      lease.State,
+		Reason:     lease.Reason,
+		Relisted:   s.hasOpenOrder(lid.GroupID(), 2),
+	}
+}
+
+// closeVolumeOnce leases a volume on a fresh suite, sends the tenant's first
+// close of it, and moves past the end of the reclamation window that close
+// starts, where either the tenant or the provider may finish the close.
+func closeVolumeOnce(t *testing.T, closeMsg func(mv1.LeaseID) sdk.Msg) (*smSuite, mv1.LeaseID, mvbeta.Order, sdk.AccAddress) {
+	t.Helper()
+
+	s := setupStorageMarketSuite(t)
+	s.enableVolumeOrders()
+
 	owner := testutil.AccAddress(t).String()
 	provider := s.createProvider(smVolumeProviderAttrs())
 
 	start := time.Date(2026, 7, 9, 12, 0, 0, 0, time.UTC)
 	s.SetBlockTime(start)
-	volLid, volOrder := s.fullVolumeLease(owner, "pg-data", provider, s.defaultDeposit())
-	volGid := volOrder.ID.GroupID()
-	did := volGid.DeploymentID()
+	lid, order := s.fullVolumeLease(owner, "pg-data", provider, s.defaultDeposit())
 
-	// The tenant's first close starts the window; past its deadline the
-	// provider closes the lease before the tenant's second close does.
-	_, err := s.dhandler(s.Context(), &dvbeta.MsgCloseDeployment{ID: did})
+	_, err := s.dhandler(s.Context(), closeMsg(lid))
 	require.NoError(t, err)
 
-	closedAt := start.Add(25 * time.Hour)
-	s.SetBlockTime(closedAt)
-	_, err = s.mhandler(s.Context(), &mvbeta.MsgCloseBid{
-		ID:     volLid.BidID(),
-		Reason: mv1.LeaseClosedReasonDecommissioned,
-	})
-	require.NoError(t, err)
-
-	// The volume is closing, so it does not re-list: its group waits,
-	// paused and still holding the vid, for the tenant's second close.
-	volLease, found := s.MarketKeeper().GetLease(s.Context(), volLid)
+	lease, found := s.MarketKeeper().GetLease(s.Context(), lid)
 	require.True(t, found)
-	assert.Equal(t, mv1.LeaseClosedReasonVolumeClosedRetain, volLease.Reason)
+	require.Equal(t, mv1.LeaseReclaiming, lease.State)
 
-	group, found := s.DeploymentKeeper().GetGroup(s.Context(), volGid)
-	require.True(t, found)
-	require.Equal(t, dvbeta.GroupPaused, group.State)
-	assert.False(t, s.hasOpenOrder(volGid, 2))
+	s.SetBlockTime(start.Add(25 * time.Hour))
 
-	_, err = s.dhandler(s.Context(), s.volumeCreateMsg(owner, "pg-data", s.defaultDeposit()))
-	require.ErrorIs(t, err, dv1.ErrVidInUse)
+	return s, lid, order, provider
+}
 
-	// Starting it again would list an order any provider could win with
-	// an empty volume while this provider still holds the data.
-	_, err = s.dhandler(s.Context(), &dvbeta.MsgStartGroup{ID: volGid})
-	require.ErrorIs(t, err, dv1.ErrVolumeNotPausable)
-	assert.False(t, s.hasOpenOrder(volGid, 2))
+func TestStorageMarketE2E_ProviderFinishesTenantClose(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		close      func(mv1.LeaseID) sdk.Msg
+		deployment dv1.Deployment_State
+		account    etypes.State
+	}{
+		{
+			name:       "deployment close",
+			close:      func(lid mv1.LeaseID) sdk.Msg { return &dvbeta.MsgCloseDeployment{ID: lid.DeploymentID()} },
+			deployment: dv1.DeploymentClosed,
+			account:    etypes.StateClosed,
+		},
+		{
+			name:       "group close",
+			close:      func(lid mv1.LeaseID) sdk.Msg { return &dvbeta.MsgCloseGroup{ID: lid.GroupID()} },
+			deployment: dv1.DeploymentActive,
+			account:    etypes.StateOpen,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			want := volumeEnd{
+				Deployment: tc.deployment,
+				Group:      dvbeta.GroupClosed,
+				Account:    tc.account,
+				Lease:      mv1.LeaseClosed,
+				Reason:     mv1.LeaseClosedReasonVolumeClosedRetain,
+			}
 
-	// The tenant's second close ends the volume, retained from the
-	// provider's close.
-	_, err = s.dhandler(s.Context(), &dvbeta.MsgCloseDeployment{ID: did})
-	require.NoError(t, err)
+			// The tenant's own second close finishing the volume...
+			tenant, tenantLid, _, _ := closeVolumeOnce(t, tc.close)
+			_, err := tenant.dhandler(tenant.Context(), tc.close(tenantLid))
+			require.NoError(t, err)
+			require.Equal(t, want, tenant.volumeEnd(tenantLid))
 
-	group, found = s.DeploymentKeeper().GetGroup(s.Context(), volGid)
-	require.True(t, found)
-	require.Equal(t, dvbeta.GroupClosed, group.State)
+			// ...and its provider closing the lease when the window ends
+			// leave the same volume behind.
+			s, lid, order, provider := closeVolumeOnce(t, tc.close)
+			_, err = s.mhandler(s.Context(), &mvbeta.MsgCloseBid{
+				ID:     lid.BidID(),
+				Reason: mv1.LeaseClosedReasonDecommissioned,
+			})
+			require.NoError(t, err)
+			require.Equal(t, want, s.volumeEnd(lid))
 
-	anchor, ok := s.MarketKeeper().LastVolumeLeaseClosedAt(s.Context(), volGid)
-	require.True(t, ok)
-	assert.Equal(t, closedAt.Unix(), anchor.Unix())
+			// The tenant's second close then has nothing left to do.
+			_, err = s.dhandler(s.Context(), tc.close(lid))
+			require.NoError(t, err)
+			require.Equal(t, want, s.volumeEnd(lid))
 
-	_, err = s.dhandler(s.Context(), s.volumeCreateMsg(owner, "pg-data", s.defaultDeposit()))
-	require.ErrorIs(t, err, dv1.ErrVidRetained)
+			// The volume is retained from the provider's close: a fresh
+			// volume cannot take its vid, and adopting it works.
+			anchor, ok := s.MarketKeeper().LastVolumeLeaseClosedAt(s.Context(), lid.GroupID())
+			require.True(t, ok)
+			require.Equal(t, s.Context().BlockTime().Unix(), anchor.Unix())
+
+			_, err = s.dhandler(s.Context(), s.volumeCreateMsg(lid.Owner, "pg-data", s.defaultDeposit()))
+			require.ErrorIs(t, err, dv1.ErrVidRetained)
+
+			msg := s.volumeCreateMsg(lid.Owner, "pg-data", s.defaultDeposit())
+			adoptRef := smVolumeRef(order)
+			msg.Groups[0].Volume.Adopt = &adoptRef
+
+			_, err = s.dhandler(s.Context(), msg)
+			require.NoError(t, err)
+
+			adoption, found := s.MarketKeeper().GetOrder(s.Context(), mv1.OrderID{
+				Owner: msg.ID.Owner, DSeq: msg.ID.DSeq, GSeq: 1, OSeq: 1,
+			})
+			require.True(t, found)
+
+			window := 24 * time.Hour
+			s.bidAndLease(adoption, provider, &window)
+		})
+	}
 }
 
 // ===========================

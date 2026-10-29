@@ -181,17 +181,24 @@ func (ms msgServer) CloseDeployment(goCtx context.Context, msg *types.MsgCloseDe
 		return &types.MsgCloseDeploymentResponse{}, v1.ErrDeploymentNotFound
 	}
 
+	groups, err := ms.deployment.GetGroups(ctx, msg.ID)
+	if err != nil {
+		return &types.MsgCloseDeploymentResponse{}, err
+	}
+
 	if deployment.State != v1.DeploymentActive {
+		// Either side finishes a tenant's close of a volume: the provider
+		// closing the lease when the window ends ends the deployment too, so
+		// the tenant's completing close may find nothing left to do.
+		if volumeDeployment(groups) {
+			return &types.MsgCloseDeploymentResponse{}, nil
+		}
 		return &types.MsgCloseDeploymentResponse{}, v1.ErrDeploymentClosed
 	}
 
 	// A volume group with attached compute leases cannot be closed by the
 	// tenant; compute closes first. (The escrow cascade cannot be blocked;
 	// it cascade-detaches in the market keeper instead.)
-	groups, err := ms.deployment.GetGroups(ctx, msg.ID)
-	if err != nil {
-		return &types.MsgCloseDeploymentResponse{}, err
-	}
 	for _, group := range groups {
 		if group.GroupSpec.Volume == nil {
 			continue
@@ -230,6 +237,12 @@ func (ms msgServer) CloseGroup(goCtx context.Context, msg *types.MsgCloseGroup) 
 		return nil, v1.ErrGroupNotFound
 	}
 
+	// The provider may already have finished this close; see
+	// CloseDeployment.
+	if group.GroupSpec.Volume != nil && group.State == types.GroupClosed {
+		return &types.MsgCloseGroupResponse{}, nil
+	}
+
 	// if Group already closed; return the validation error
 	err := group.ValidateClosable()
 	if err != nil {
@@ -244,12 +257,16 @@ func (ms msgServer) CloseGroup(goCtx context.Context, msg *types.MsgCloseGroup) 
 		}
 
 		// A tenant volume close routes through the reclamation window; see
-		// CloseDeployment.
+		// CloseDeployment. A window started here ends the group alone, which
+		// the provider must know if it closes the lease when the window ends.
 		proceed, err := ms.market.ReclaimVolumeOnClose(ctx, group.ID, mv1.LeaseClosedReasonVolumeClosedRetain)
 		if err != nil {
 			return nil, err
 		}
 		if !proceed {
+			if err := ms.market.MarkVolumeGroupClose(ctx, group.ID); err != nil {
+				return nil, err
+			}
 			return &types.MsgCloseGroupResponse{}, nil
 		}
 	}
@@ -310,10 +327,9 @@ func (ms msgServer) StartGroup(goCtx context.Context, msg *types.MsgStartGroup) 
 
 	// Starting a volume group lists a fresh order that skips the volume
 	// gates: any provider could win it with an empty volume while the
-	// provider of the group's last lease still holds the data. A volume group
-	// is paused only when its provider closes the lease at the end of the
-	// tenant's own close, which the tenant's second close finishes, and an
-	// unfunded one is dead for good.
+	// provider of the group's last lease still holds the data. No volume
+	// group pauses any more, and an unfunded one, which ValidateStartable
+	// lets through, is dead for good.
 	if group.GroupSpec.Volume != nil {
 		return &types.MsgStartGroupResponse{}, v1.ErrVolumeNotPausable.Wrapf("volume group %s", group.ID)
 	}
@@ -486,6 +502,12 @@ func (ms msgServer) vidRetainer(ctx sdk.Context, holder types.Group) (v1.GroupID
 	}
 
 	return adopted.ID, closedAt.Add(adopted.GroupSpec.Volume.Retention), true
+}
+
+// volumeDeployment reports whether the groups are a volume deployment's,
+// which holds its volume group alone.
+func volumeDeployment(groups types.Groups) bool {
+	return len(groups) == 1 && groups[0].GroupSpec.Volume != nil
 }
 
 // groupLive reports whether the group occupies its vid: open and paused

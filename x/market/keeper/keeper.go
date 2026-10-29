@@ -57,6 +57,8 @@ type IKeeper interface {
 	VolumeLease(ctx sdk.Context, id dtypes.GroupID) (mv1.Lease, bool)
 	LastClosedVolumeLeaseProvider(ctx sdk.Context, id dtypes.GroupID) (string, bool)
 	ReclaimVolumeOnClose(ctx sdk.Context, id dtypes.GroupID, reason mv1.LeaseClosedReason) (bool, error)
+	MarkVolumeGroupClose(ctx sdk.Context, id dtypes.GroupID) error
+	VolumeGroupClose(ctx sdk.Context, id mv1.LeaseID) bool
 	RebuildAttachmentIndexes(ctx sdk.Context) error
 	LastVolumeLeaseClosedAt(ctx sdk.Context, id dtypes.GroupID) (time.Time, bool)
 	GetLeaseResize(ctx sdk.Context, id dtypes.DeploymentID) (types.LeaseResize, bool)
@@ -90,6 +92,11 @@ type Keeper struct {
 
 	// pending in-place lease resizes, at most one per deployment
 	leaseResizes collections.Map[keys.DeploymentPartKey, types.LeaseResize]
+
+	// volume leases in a reclamation the tenant started with MsgCloseGroup:
+	// the close ends the group alone, not its deployment. Kept only while
+	// the lease is live; see MarkVolumeGroupClose.
+	volumeGroupCloses collections.KeySet[keys.LeasePrimaryKey]
 }
 
 // NewKeeper creates and returns an instance for Market keeper
@@ -109,6 +116,7 @@ func NewKeeper(cdc codec.BinaryCodec, skey *storetypes.KVStoreKey, ekeeper Escro
 	attachments := collections.NewKeySet(sb, collections.NewPrefix(keys.AttachmentsPrefix), "attachments", keys.AttachmentKeyCodec)
 	attachmentsRev := collections.NewKeySet(sb, collections.NewPrefix(keys.AttachmentsRevPrefix), "attachments_rev", keys.AttachmentRevKeyCodec)
 	leaseResizes := collections.NewMap(sb, collections.NewPrefix(keys.LeaseResizePrefix), "lease_resizes", keys.DeploymentPartKeyCodec, codec.CollValue[types.LeaseResize](cdc))
+	volumeGroupCloses := collections.NewKeySet(sb, collections.NewPrefix(keys.VolumeGroupClosePrefix), "volume_group_closes", keys.LeasePrimaryKeyCodec)
 
 	schema, err := sb.Build()
 	if err != nil {
@@ -116,18 +124,19 @@ func NewKeeper(cdc codec.BinaryCodec, skey *storetypes.KVStoreKey, ekeeper Escro
 	}
 
 	res := &Keeper{
-		skey:           skey,
-		cdc:            cdc,
-		ekeeper:        ekeeper,
-		authority:      authority,
-		schema:         schema,
-		bids:           bids,
-		orders:         orders,
-		leases:         leases,
-		Params:         params,
-		attachments:    attachments,
-		attachmentsRev: attachmentsRev,
-		leaseResizes:   leaseResizes,
+		skey:              skey,
+		cdc:               cdc,
+		ekeeper:           ekeeper,
+		authority:         authority,
+		schema:            schema,
+		bids:              bids,
+		orders:            orders,
+		leases:            leases,
+		Params:            params,
+		attachments:       attachments,
+		attachmentsRev:    attachmentsRev,
+		leaseResizes:      leaseResizes,
+		volumeGroupCloses: volumeGroupCloses,
 	}
 
 	return res
@@ -403,6 +412,10 @@ func (k Keeper) OnLeaseClosed(ctx sdk.Context, lease mv1.Lease, state mv1.Lease_
 		reason = volumeLeaseCloseReason(lease, state, reason)
 		if err := k.cascadeDetach(ctx, lease.ID.GroupID()); err != nil {
 			return err
+		}
+
+		if err := k.volumeGroupCloses.Remove(ctx, keys.LeaseIDToKey(lease.ID)); err != nil {
+			return fmt.Errorf("failed to drop volume group close: %w", err)
 		}
 	}
 

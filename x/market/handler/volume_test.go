@@ -11,6 +11,7 @@ import (
 
 	dv1 "pkg.akt.dev/go/node/deployment/v1"
 	dtypes "pkg.akt.dev/go/node/deployment/v1beta4"
+	etypes "pkg.akt.dev/go/node/escrow/types/v1"
 	mv1 "pkg.akt.dev/go/node/market/v1"
 	mvbeta "pkg.akt.dev/go/node/market/v1beta5"
 	ptypes "pkg.akt.dev/go/node/provider/v1beta4"
@@ -956,7 +957,11 @@ func TestLeaseStartReclaim_VolumeEvicts(t *testing.T) {
 	}
 }
 
-func TestCloseBid_VolumeTenantCloseDoesNotRelist(t *testing.T) {
+// ===========================
+// Provider close finishes a tenant's close
+// ===========================
+
+func TestCloseBid_VolumeFinishesTenantDeploymentClose(t *testing.T) {
 	suite := setupTestSuite(t)
 	prepareBlanketMocks(suite)
 	suite.enableVolumeOrders()
@@ -976,36 +981,93 @@ func TestCloseBid_VolumeTenantCloseDoesNotRelist(t *testing.T) {
 
 	// Past the deadline the provider closes the lease before the tenant's
 	// second close, naming an eviction of its own.
-	late := suite.Context().WithBlockTime(blockTime.Add(25 * time.Hour))
+	lateTime := blockTime.Add(25 * time.Hour)
+	late := suite.Context().WithBlockTime(lateTime)
 	_, err = suite.handler(late, &mvbeta.MsgCloseBid{ID: volBid.ID, Reason: mv1.LeaseClosedReasonVolumeEvict})
 	require.NoError(t, err)
 
-	// The lease records the tenant's close and the volume does not re-list:
-	// the group waits, paused, for the tenant's second close.
+	// The provider's close finishes the tenant's: the lease records the
+	// tenant's close, the volume does not re-list, and the deployment ends
+	// with its group and escrow account, retained from this close.
 	lease, found := suite.MarketKeeper().GetLease(suite.Context(), volLid)
 	require.True(t, found)
 	assert.Equal(t, mv1.LeaseClosed, lease.State)
 	assert.Equal(t, mv1.LeaseClosedReasonVolumeClosedRetain, lease.Reason)
+	assert.Equal(t, lateTime.Unix(), lease.ClosedAt)
 
 	group, found := suite.DeploymentKeeper().GetGroup(suite.Context(), volGid)
 	require.True(t, found)
-	assert.Equal(t, dtypes.GroupPaused, group.State)
+	assert.Equal(t, dtypes.GroupClosed, group.State)
 	assert.False(t, suite.hasOpenOrder(volGid, 2), "a closing volume must not re-list")
 
-	// Starting it would list an order any provider could win empty.
-	_, err = suite.dhandler(late, &dtypes.MsgStartGroup{ID: volGid})
-	require.ErrorIs(t, err, dv1.ErrVolumeNotPausable)
-	assert.False(t, suite.hasOpenOrder(volGid, 2))
+	deployment, found := suite.DeploymentKeeper().GetDeployment(suite.Context(), did)
+	require.True(t, found)
+	assert.Equal(t, dv1.DeploymentClosed, deployment.State)
 
-	// The tenant's second close ends the volume.
+	account, err := suite.EscrowKeeper().GetAccount(suite.Context(), did.ToEscrowAccountID())
+	require.NoError(t, err)
+	assert.Equal(t, etypes.StateClosed, account.State.State)
+
+	// The tenant's second close finds nothing left to do.
 	_, err = suite.dhandler(late, &dtypes.MsgCloseDeployment{ID: did})
 	require.NoError(t, err)
 
-	group, found = suite.DeploymentKeeper().GetGroup(suite.Context(), volGid)
+	_, err = suite.dhandler(late, &dtypes.MsgCloseGroup{ID: volGid})
+	require.NoError(t, err)
+}
+
+func TestCloseBid_VolumeFinishesTenantGroupClose(t *testing.T) {
+	suite := setupTestSuite(t)
+	prepareBlanketMocks(suite)
+	suite.enableVolumeOrders()
+
+	providerAddr := testutil.AccAddress(t)
+	volLid, volBid, volOrder, _ := suite.createVolumeLease("pgdata", providerAddr, 24*time.Hour)
+	volGid := volOrder.ID.GroupID()
+	did := volGid.DeploymentID()
+	suite.setupLeaseEscrow(volBid, volOrder)
+
+	blockTime := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
+	ctx := suite.Context().WithBlockTime(blockTime)
+
+	// The tenant's first close names the group alone.
+	_, err := suite.dhandler(ctx, &dtypes.MsgCloseGroup{ID: volGid})
+	require.NoError(t, err)
+	require.True(t, suite.MarketKeeper().VolumeGroupClose(suite.Context(), volLid))
+
+	late := suite.Context().WithBlockTime(blockTime.Add(25 * time.Hour))
+	_, err = suite.handler(late, &mvbeta.MsgCloseBid{ID: volBid.ID, Reason: mv1.LeaseClosedReasonDecommissioned})
+	require.NoError(t, err)
+
+	// The group ends and the deployment stays open with its escrow account,
+	// as the tenant's own completing MsgCloseGroup would leave them.
+	lease, found := suite.MarketKeeper().GetLease(suite.Context(), volLid)
+	require.True(t, found)
+	assert.Equal(t, mv1.LeaseClosedReasonVolumeClosedRetain, lease.Reason)
+	assert.False(t, suite.MarketKeeper().VolumeGroupClose(suite.Context(), volLid), "the mark goes with the lease")
+
+	group, found := suite.DeploymentKeeper().GetGroup(suite.Context(), volGid)
 	require.True(t, found)
 	assert.Equal(t, dtypes.GroupClosed, group.State)
+	assert.False(t, suite.hasOpenOrder(volGid, 2), "a closing volume must not re-list")
 
 	deployment, found := suite.DeploymentKeeper().GetDeployment(suite.Context(), did)
+	require.True(t, found)
+	assert.Equal(t, dv1.DeploymentActive, deployment.State)
+
+	account, err := suite.EscrowKeeper().GetAccount(suite.Context(), did.ToEscrowAccountID())
+	require.NoError(t, err)
+	assert.Equal(t, etypes.StateOpen, account.State.State)
+
+	// The tenant's second close finds nothing left to do, and closing the
+	// deployment still ends it.
+	_, err = suite.dhandler(late, &dtypes.MsgCloseGroup{ID: volGid})
+	require.NoError(t, err)
+
+	_, err = suite.dhandler(late, &dtypes.MsgCloseDeployment{ID: did})
+	require.NoError(t, err)
+
+	deployment, found = suite.DeploymentKeeper().GetDeployment(suite.Context(), did)
 	require.True(t, found)
 	assert.Equal(t, dv1.DeploymentClosed, deployment.State)
 }

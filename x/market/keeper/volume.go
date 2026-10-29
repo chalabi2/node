@@ -399,6 +399,40 @@ func (k Keeper) ReclaimVolumeOnClose(ctx sdk.Context, id dtypes.GroupID, reason 
 	return false, nil
 }
 
+// MarkVolumeGroupClose records that the reclamation the tenant just started
+// on the volume group's lease ends the group alone, as a MsgCloseGroup does,
+// not its deployment. A provider that closes the lease when the window ends
+// finishes the tenant's close and reads this to leave the deployment open,
+// just as the tenant's own completing close would.
+//
+// Without the mark the close ends the deployment, the common case. The mark
+// is not carried in genesis, so after an export and import a provider's
+// close also ends the deployment of a volume whose tenant closed only its
+// group; a volume deployment holds nothing but that group.
+func (k Keeper) MarkVolumeGroupClose(ctx sdk.Context, id dtypes.GroupID) error {
+	lease, found := k.VolumeLease(ctx, id)
+	if !found {
+		return nil
+	}
+
+	if err := k.volumeGroupCloses.Set(ctx, keys.LeaseIDToKey(lease.ID)); err != nil {
+		return fmt.Errorf("failed to mark volume group close: %w", err)
+	}
+
+	return nil
+}
+
+// VolumeGroupClose reports whether the tenant's close under way on the volume
+// lease ends its group alone; see MarkVolumeGroupClose.
+func (k Keeper) VolumeGroupClose(ctx sdk.Context, id mv1.LeaseID) bool {
+	has, err := k.volumeGroupCloses.Has(ctx, keys.LeaseIDToKey(id))
+	if err != nil {
+		panic(fmt.Sprintf("VolumeGroupClose lookup failed: %v", err))
+	}
+
+	return has
+}
+
 // RebuildAttachmentIndexes derives both attachment index directions from the
 // live leases and their orders' group specs. The indexes are a pure function
 // of that state — an attachment exists exactly for each live (active or
