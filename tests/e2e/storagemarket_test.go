@@ -602,6 +602,64 @@ func TestStorageMarketE2E_RetentionAdoption(t *testing.T) {
 	})
 }
 
+func TestStorageMarketE2E_UnleasedAdoptionKeepsVidRetained(t *testing.T) {
+	s := setupStorageMarketSuite(t)
+	s.enableVolumeOrders()
+
+	owner := testutil.AccAddress(t).String()
+	retainer := s.createProvider(smVolumeProviderAttrs())
+
+	start := time.Date(2026, 7, 9, 12, 0, 0, 0, time.UTC)
+	_, retainedOrder, anchor := s.deadRetainedVolume(owner, "db", retainer, start)
+	s.SetBlockTime(anchor.Add(time.Hour))
+
+	// An adoption of the retained volume takes the vid's index entry...
+	adoption := s.volumeCreateMsg(owner, "db", s.defaultDeposit())
+	adoptRef := smVolumeRef(retainedOrder)
+	adoption.Groups[0].Volume.Adopt = &adoptRef
+
+	_, err := s.dhandler(s.Context(), adoption)
+	require.NoError(t, err)
+
+	gid, found := s.DeploymentKeeper().GetVolumeByVid(s.Context(), owner, "db")
+	require.True(t, found)
+	require.Equal(t, dv1.MakeGroupID(adoption.ID, 1), gid)
+
+	// ...and the tenant closes it before it ever gets a lease. With no
+	// lease to wait out, the close completes at once.
+	_, err = s.dhandler(s.Context(), &dvbeta.MsgCloseDeployment{ID: adoption.ID})
+	require.NoError(t, err)
+
+	group, found := s.DeploymentKeeper().GetGroup(s.Context(), gid)
+	require.True(t, found)
+	require.Equal(t, dvbeta.GroupClosed, group.State)
+
+	// The adoption never took the data over: the retaining provider still
+	// holds it for the volume the adoption named, which keeps the vid.
+	t.Run("fresh create rejected", func(t *testing.T) {
+		_, err := s.dhandler(s.Context(), s.volumeCreateMsg(owner, "db", s.defaultDeposit()))
+		require.ErrorIs(t, err, dv1.ErrVidRetained)
+	})
+
+	t.Run("adopting the retained volume still works", func(t *testing.T) {
+		msg := s.volumeCreateMsg(owner, "db", s.defaultDeposit())
+		msg.Groups[0].Volume.Adopt = &adoptRef
+
+		res, err := s.dhandler(s.Context(), msg)
+		require.NoError(t, err)
+		require.NotNil(t, res)
+
+		order, found := s.MarketKeeper().GetOrder(s.Context(), mv1.OrderID{
+			Owner: msg.ID.Owner, DSeq: msg.ID.DSeq, GSeq: 1, OSeq: 1,
+		})
+		require.True(t, found)
+
+		// bids stay gated to the provider holding the data
+		window := 24 * time.Hour
+		s.bidAndLease(order, retainer, &window)
+	})
+}
+
 func TestStorageMarketE2E_RetentionExpiry(t *testing.T) {
 	s := setupStorageMarketSuite(t)
 	s.enableVolumeOrders()

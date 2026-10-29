@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"time"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	govtypes "github.com/cosmos/cosmos-sdk/x/gov/types"
@@ -358,28 +359,33 @@ func (ms msgServer) validateVolumeCreate(ctx sdk.Context, msg *types.MsgCreateDe
 	}
 
 	// 2. vid gate: the data-continuity label must not be minted over. A
-	// live holder rejects; a dead holder inside its retention window
-	// rejects unless this create adopts exactly that volume; an expired or
-	// absent holder frees the label.
+	// live holder rejects; while a dead volume still holds the vid's data
+	// inside its retention window, a create rejects unless it adopts exactly
+	// that volume; expired or absent data frees the label.
+	var (
+		retainer      v1.GroupID
+		retainedUntil time.Time
+		retained      bool
+	)
+
 	if gid, found := ms.deployment.GetVolumeByVid(ctx, msg.ID.Owner, vol.Vid); found {
-		if prev, ok := ms.deployment.GetGroup(ctx, gid); ok {
-			if groupLive(prev) {
+		if holder, ok := ms.deployment.GetGroup(ctx, gid); ok {
+			if groupLive(holder) {
 				return v1.ErrVidInUse.Wrapf("vid %q held by volume group %s", vol.Vid, gid)
 			}
 
-			if closedAt, ok := ms.market.LastVolumeLeaseClosedAt(ctx, gid); ok {
-				retainedUntil := closedAt.Add(prev.GroupSpec.Volume.Retention)
-				retained := ctx.BlockTime().Before(retainedUntil)
-				adopted := vol.Adopt != nil && vol.Adopt.GroupID().Equals(gid)
-				if retained && !adopted {
-					return v1.ErrVidRetained.Wrapf("vid %q retained by dead volume group %s until %s", vol.Vid, gid, retainedUntil)
-				}
-			}
+			retainer, retainedUntil, retained = ms.vidRetainer(ctx, holder)
+			retained = retained && ctx.BlockTime().Before(retainedUntil)
 		}
 	}
 
+	if retained && (vol.Adopt == nil || !vol.Adopt.GroupID().Equals(retainer)) {
+		return v1.ErrVidRetained.Wrapf("vid %q retained by dead volume group %s until %s", vol.Vid, retainer, retainedUntil)
+	}
+
 	// 3. Adoption: the reference must name a dead volume of the same owner
-	// and vid, still inside its retention window.
+	// and vid, still inside its retention window, that still holds the vid's
+	// data.
 	if adopt := vol.Adopt; adopt != nil {
 		target, ok := ms.deployment.GetGroup(ctx, adopt.GroupID())
 		if !ok {
@@ -417,6 +423,11 @@ func (ms msgServer) validateVolumeCreate(ctx sdk.Context, msg *types.MsgCreateDe
 		if !ctx.BlockTime().Before(closedAt.Add(tvol.Retention)) {
 			return v1.ErrInvalidVolumeAdoption.Wrapf("retention window expired at %s", closedAt.Add(tvol.Retention))
 		}
+		// an adoption that got a lease took the data over on its own terms,
+		// so the volume it adopted holds none of it, whatever its window says
+		if !retained || !adopt.GroupID().Equals(retainer) {
+			return v1.ErrInvalidVolumeAdoption.Wrapf("volume group %s no longer holds the data of vid %q", adopt.GroupID(), vol.Vid)
+		}
 	}
 
 	// 4. Replica: the reference must name a live volume of the same owner
@@ -451,6 +462,35 @@ func (ms msgServer) validateVolumeCreate(ctx sdk.Context, msg *types.MsgCreateDe
 	}
 
 	return nil
+}
+
+// vidRetainer returns the dead volume that holds the data of the vid whose
+// index entry is holder, and the end of its retention window. A holder that
+// had a lease holds its own data. One that never had a lease holds none: if
+// it was created to adopt a volume, the adoption never happened and the data
+// is still that volume's, on that volume's terms. Adoption needs a volume
+// that had a lease, so this looks at most one volume back.
+func (ms msgServer) vidRetainer(ctx sdk.Context, holder types.Group) (v1.GroupID, time.Time, bool) {
+	if closedAt, ok := ms.market.LastVolumeLeaseClosedAt(ctx, holder.ID); ok {
+		return holder.ID, closedAt.Add(holder.GroupSpec.Volume.Retention), true
+	}
+
+	adopt := holder.GroupSpec.Volume.Adopt
+	if adopt == nil {
+		return v1.GroupID{}, time.Time{}, false
+	}
+
+	adopted, ok := ms.deployment.GetGroup(ctx, adopt.GroupID())
+	if !ok || adopted.GroupSpec.Volume == nil {
+		return v1.GroupID{}, time.Time{}, false
+	}
+
+	closedAt, ok := ms.market.LastVolumeLeaseClosedAt(ctx, adopted.ID)
+	if !ok {
+		return v1.GroupID{}, time.Time{}, false
+	}
+
+	return adopted.ID, closedAt.Add(adopted.GroupSpec.Volume.Retention), true
 }
 
 // groupLive reports whether the group occupies its vid: open and paused

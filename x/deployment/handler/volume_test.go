@@ -250,6 +250,148 @@ func TestVolumeVidExpiredWindow(t *testing.T) {
 	})
 }
 
+// unleasedAdoption creates a volume under vid, closes it with a lease closed
+// at the suite's block time, then creates an adoption of it and closes that
+// before it gets a lease. The adoption ends up holding the vid's index entry.
+func (vs *volumeTestSuite) unleasedAdoption(t *testing.T, vid string) (*dvbeta.MsgCreateDeployment, *dvbeta.MsgCreateDeployment) {
+	t.Helper()
+
+	retained := vs.createVolumeMsg(t, vid)
+	_, err := vs.vhandler(vs.ctx, retained)
+	require.NoError(t, err)
+	_, err = vs.vhandler(vs.ctx, &dvbeta.MsgCloseDeployment{ID: retained.ID})
+	require.NoError(t, err)
+
+	vs.market.leaseClosedAt[volumeGroupID(retained)] = vs.ctx.BlockTime()
+
+	adoption := vs.createVolumeMsg(t, vid)
+	adoption.Groups[0].Volume.Adopt = volumeRef(retained)
+	_, err = vs.vhandler(vs.ctx, adoption)
+	require.NoError(t, err)
+	_, err = vs.vhandler(vs.ctx, &dvbeta.MsgCloseDeployment{ID: adoption.ID})
+	require.NoError(t, err)
+
+	gid, ok := vs.dkeeper.GetVolumeByVid(vs.ctx, vs.owner, vid)
+	require.True(t, ok)
+	require.Equal(t, volumeGroupID(adoption), gid)
+
+	return retained, adoption
+}
+
+func TestVolumeVidHeldThroughUnleasedAdoption(t *testing.T) {
+	vs := setupVolumeTestSuite(t)
+
+	// the adoption never got a lease, so it never took the data over: the
+	// volume it adopted still holds the vid through its 24h fixture window
+	retained, adoption := vs.unleasedAdoption(t, "pg-data")
+
+	t.Run("fresh create rejected", func(t *testing.T) {
+		res, err := vs.vhandler(vs.ctx, vs.createVolumeMsg(t, "pg-data"))
+		require.Nil(t, res)
+		require.ErrorIs(t, err, v1.ErrVidRetained)
+		require.ErrorContains(t, err, volumeGroupID(retained).String())
+	})
+
+	t.Run("adopting the unleased adoption rejected", func(t *testing.T) {
+		msg := vs.createVolumeMsg(t, "pg-data")
+		msg.Groups[0].Volume.Adopt = volumeRef(adoption)
+
+		res, err := vs.vhandler(vs.ctx, msg)
+		require.Nil(t, res)
+		require.ErrorIs(t, err, v1.ErrVidRetained)
+	})
+
+	t.Run("adopting the retained volume passes", func(t *testing.T) {
+		msg := vs.createVolumeMsg(t, "pg-data")
+		msg.Groups[0].Volume.Adopt = volumeRef(retained)
+
+		res, err := vs.vhandler(vs.ctx, msg)
+		require.NoError(t, err)
+		require.NotNil(t, res)
+
+		gid, ok := vs.dkeeper.GetVolumeByVid(vs.ctx, vs.owner, "pg-data")
+		require.True(t, ok)
+		require.Equal(t, volumeGroupID(msg), gid)
+	})
+}
+
+func TestVolumeVidFreedOnceUnleasedAdoptionTargetExpires(t *testing.T) {
+	vs := setupVolumeTestSuite(t)
+
+	retained, _ := vs.unleasedAdoption(t, "pg-data")
+	expired := vs.ctx.WithBlockTime(vs.market.leaseClosedAt[volumeGroupID(retained)].Add(24*time.Hour + time.Second))
+
+	t.Run("adopting the expired volume rejected", func(t *testing.T) {
+		msg := vs.createVolumeMsg(t, "pg-data")
+		msg.Groups[0].Volume.Adopt = volumeRef(retained)
+
+		res, err := vs.vhandler(expired, msg)
+		require.Nil(t, res)
+		require.ErrorIs(t, err, v1.ErrInvalidVolumeAdoption)
+	})
+
+	t.Run("fresh create allowed", func(t *testing.T) {
+		res, err := vs.vhandler(expired, vs.createVolumeMsg(t, "pg-data"))
+		require.NoError(t, err)
+		require.NotNil(t, res)
+	})
+}
+
+func TestVolumeAdoptionOfTakenOverVolumeRejected(t *testing.T) {
+	vs := setupVolumeTestSuite(t)
+
+	first := vs.createVolumeMsg(t, "pg-data")
+	_, err := vs.vhandler(vs.ctx, first)
+	require.NoError(t, err)
+	_, err = vs.vhandler(vs.ctx, &dvbeta.MsgCloseDeployment{ID: first.ID})
+	require.NoError(t, err)
+
+	closedAt := vs.ctx.BlockTime()
+	vs.market.leaseClosedAt[volumeGroupID(first)] = closedAt
+
+	// this adoption got a lease, so the data became its own, kept for an
+	// hour after that lease closed
+	adoption := vs.createVolumeMsg(t, "pg-data")
+	adoption.Groups[0].Volume.Adopt = volumeRef(first)
+	adoption.Groups[0].Volume.Retention = time.Hour
+	_, err = vs.vhandler(vs.ctx, adoption)
+	require.NoError(t, err)
+	_, err = vs.vhandler(vs.ctx, &dvbeta.MsgCloseDeployment{ID: adoption.ID})
+	require.NoError(t, err)
+
+	vs.market.leaseClosedAt[volumeGroupID(adoption)] = closedAt
+
+	t.Run("adopting the first volume while the adoption retains rejected", func(t *testing.T) {
+		msg := vs.createVolumeMsg(t, "pg-data")
+		msg.Groups[0].Volume.Adopt = volumeRef(first)
+
+		res, err := vs.vhandler(vs.ctx.WithBlockTime(closedAt.Add(30*time.Minute)), msg)
+		require.Nil(t, res)
+		require.ErrorIs(t, err, v1.ErrVidRetained)
+		require.ErrorContains(t, err, volumeGroupID(adoption).String())
+	})
+
+	// the adoption's hour is over, while the first volume's own 24h window
+	// is still open
+	later := vs.ctx.WithBlockTime(closedAt.Add(2 * time.Hour))
+
+	t.Run("adopting the first volume after the adoption's window rejected", func(t *testing.T) {
+		msg := vs.createVolumeMsg(t, "pg-data")
+		msg.Groups[0].Volume.Adopt = volumeRef(first)
+
+		res, err := vs.vhandler(later, msg)
+		require.Nil(t, res)
+		require.ErrorIs(t, err, v1.ErrInvalidVolumeAdoption)
+		require.ErrorContains(t, err, "no longer holds")
+	})
+
+	t.Run("fresh create allowed", func(t *testing.T) {
+		res, err := vs.vhandler(later, vs.createVolumeMsg(t, "pg-data"))
+		require.NoError(t, err)
+		require.NotNil(t, res)
+	})
+}
+
 func TestVolumeAdoptionInvalidTargets(t *testing.T) {
 	vs := setupVolumeTestSuite(t)
 
