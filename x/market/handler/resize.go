@@ -52,19 +52,8 @@ func (ms msgServer) ResizeLease(goCtx context.Context, msg *mvbeta.MsgResizeLeas
 			return nil, cerrors.Wrap(mv1.ErrInvalidLeaseResize, "a volume's size is not part of the manifest; send no hash")
 		}
 
-		dparams, err := ms.keepers.Deployment.GetParams(ctx)
-		if err != nil {
+		if err := ms.checkVolumeResize(ctx, group, next); err != nil {
 			return nil, err
-		}
-
-		if err := next.ValidateVolumeBounds(dparams); err != nil {
-			return nil, cerrors.Wrap(mv1.ErrInvalidLeaseResize, err.Error())
-		}
-
-		// a replica copies its source block for block, so neither side of a
-		// live replication changes size until the migration is done
-		if ms.replicating(ctx, group) {
-			return nil, cerrors.Wrap(mv1.ErrInvalidLeaseResize, "a volume being replicated cannot be resized")
 		}
 	}
 
@@ -99,6 +88,29 @@ func (ms msgServer) ResizeLease(goCtx context.Context, msg *mvbeta.MsgResizeLeas
 	}
 
 	return &mvbeta.MsgResizeLeaseResponse{}, nil
+}
+
+// checkVolumeResize runs the rules a volume's new size must meet, both when
+// the resize is requested and when it is accepted, since what they read can
+// change in between: the governance bounds, and that the volume is at
+// neither end of a live replication.
+func (ms msgServer) checkVolumeResize(ctx sdk.Context, group dvbeta.Group, next dvbeta.GroupSpec) error {
+	dparams, err := ms.keepers.Deployment.GetParams(ctx)
+	if err != nil {
+		return err
+	}
+
+	if err := next.ValidateVolumeBounds(dparams); err != nil {
+		return cerrors.Wrap(mv1.ErrInvalidLeaseResize, err.Error())
+	}
+
+	// a replica copies its source block for block, so neither side of a
+	// live replication changes size until the migration is done
+	if ms.replicating(ctx, group) {
+		return cerrors.Wrap(mv1.ErrInvalidLeaseResize, "a volume being replicated cannot be resized")
+	}
+
+	return nil
 }
 
 // replicating reports whether the volume group is either end of a live
@@ -167,6 +179,15 @@ func (ms msgServer) AcceptLeaseResize(goCtx context.Context, msg *mvbeta.MsgAcce
 	next, err := group.GroupSpec.Resize(resize.Resources)
 	if err != nil {
 		return nil, err
+	}
+
+	// a replica may have been created, or the size cap lowered, since the
+	// request; the feature flag is not checked again, so a resize requested
+	// before the flag went off can still be answered
+	if next.Volume != nil {
+		if err := ms.checkVolumeResize(ctx, group, next); err != nil {
+			return nil, err
+		}
 	}
 
 	order, found := ms.keepers.Market.GetOrder(ctx, msg.ID.OrderID())

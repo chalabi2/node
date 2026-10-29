@@ -45,6 +45,22 @@ func (s *smSuite) computeLease(owner string, provider sdk.AccAddress) (mv1.Lease
 	return lid, order
 }
 
+// leaseVolume creates the volume deployment msg describes and leases it to
+// the provider with a 24h reclamation window.
+func (s *smSuite) leaseVolume(msg *dvbeta.MsgCreateDeployment, provider sdk.AccAddress) (mv1.LeaseID, mvbeta.Order) {
+	s.t.Helper()
+
+	_, err := s.dhandler(s.Context(), msg)
+	require.NoError(s.t, err)
+
+	order, found := s.MarketKeeper().GetOrder(s.Context(), mv1.MakeOrderID(dv1.MakeGroupID(msg.ID, 1), 1))
+	require.True(s.t, found)
+
+	window := 24 * time.Hour
+
+	return s.bidAndLease(order, provider, &window), order
+}
+
 // grownCompute quadruples CPU and doubles memory of the single unit and
 // raises its price ceiling to 3uact/block.
 func grownCompute(spec dvbeta.GroupSpec) dvbeta.ResourceUnits {
@@ -579,4 +595,73 @@ func TestLeaseResizeE2E_ReplicatingVolumeKeepsItsSize(t *testing.T) {
 
 	_, err = s.mhandler(s.Context(), mvbeta.NewMsgResizeLease(srcLid, grownVolume(srcOrder), nil))
 	require.NoError(t, err)
+}
+
+func TestLeaseResizeE2E_AcceptRechecksVolumeRules(t *testing.T) {
+	s := setupStorageMarketSuite(t)
+	s.enableVolumeOrders()
+	s.enableLeaseResize()
+
+	owner := testutil.AccAddress(t).String()
+
+	volumeSize := func(lid mv1.LeaseID) uint64 {
+		group, found := s.DeploymentKeeper().GetGroup(s.Context(), lid.GroupID())
+		require.True(t, found)
+
+		return group.GroupSpec.Resources[0].Storage[0].Quantity.Value()
+	}
+
+	t.Run("a replica created after the request blocks the accept", func(t *testing.T) {
+		srcMsg := s.volumeCreateMsg(owner, "pg-data", s.defaultDeposit())
+		srcMsg.Groups[0].Volume.MaxReplicas = 1
+		srcLid, srcOrder := s.leaseVolume(srcMsg, s.createProvider(smVolumeProviderAttrs()))
+
+		_, err := s.mhandler(s.Context(), mvbeta.NewMsgResizeLease(srcLid, grownVolume(srcOrder), nil))
+		require.NoError(t, err)
+		digest := s.pendingDigest(srcLid)
+
+		// the replica is created between the request and the accept
+		repMsg := s.volumeCreateMsg(owner, "pg-data-r1", s.defaultDeposit())
+		srcRef := smVolumeRef(srcOrder)
+		repMsg.Groups[0].Volume.ReplicaOf = &srcRef
+		_, err = s.dhandler(s.Context(), repMsg)
+		require.NoError(t, err)
+
+		_, err = s.mhandler(s.Context(), mvbeta.NewMsgAcceptLeaseResize(srcLid, uact(1), digest))
+		require.ErrorIs(t, err, mv1.ErrInvalidLeaseResize)
+		require.Equal(t, uint64(10*unit.Gi), volumeSize(srcLid), "nothing was applied")
+
+		// with the replica gone the same request can be accepted
+		_, err = s.dhandler(s.Context(), &dvbeta.MsgCloseDeployment{ID: repMsg.ID})
+		require.NoError(t, err)
+
+		_, err = s.mhandler(s.Context(), mvbeta.NewMsgAcceptLeaseResize(srcLid, uact(1), digest))
+		require.NoError(t, err)
+		require.Equal(t, uint64(20*unit.Gi), volumeSize(srcLid))
+	})
+
+	t.Run("a size cap lowered after the request blocks the accept", func(t *testing.T) {
+		lid, order := s.leaseVolume(s.volumeCreateMsg(owner, "media", s.defaultDeposit()), s.createProvider(smVolumeProviderAttrs()))
+
+		_, err := s.mhandler(s.Context(), mvbeta.NewMsgResizeLease(lid, grownVolume(order), nil))
+		require.NoError(t, err)
+		digest := s.pendingDigest(lid)
+
+		dparams, err := s.DeploymentKeeper().GetParams(s.Context())
+		require.NoError(t, err)
+
+		capped := dparams
+		capped.MaxVolumeSize = 15 * unit.Gi
+		require.NoError(t, s.DeploymentKeeper().SetParams(s.Context(), capped))
+
+		_, err = s.mhandler(s.Context(), mvbeta.NewMsgAcceptLeaseResize(lid, uact(1), digest))
+		require.ErrorIs(t, err, mv1.ErrInvalidLeaseResize)
+		require.Equal(t, uint64(10*unit.Gi), volumeSize(lid), "nothing was applied")
+
+		require.NoError(t, s.DeploymentKeeper().SetParams(s.Context(), dparams))
+
+		_, err = s.mhandler(s.Context(), mvbeta.NewMsgAcceptLeaseResize(lid, uact(1), digest))
+		require.NoError(t, err)
+		require.Equal(t, uint64(20*unit.Gi), volumeSize(lid))
+	})
 }
