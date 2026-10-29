@@ -605,10 +605,6 @@ func (k *keeper) accountSettle(ctx sdk.Context, acc *account) ([]payment, bool, 
 		}
 	}
 
-	if err := k.emitAccountRunway(ctx, acc, payments); err != nil {
-		return payments, overdrawn, err
-	}
-
 	return payments, overdrawn, nil
 }
 
