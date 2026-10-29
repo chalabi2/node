@@ -665,3 +665,211 @@ func TestLeaseResizeE2E_AcceptRechecksVolumeRules(t *testing.T) {
 		require.Equal(t, uint64(20*unit.Gi), volumeSize(lid))
 	})
 }
+
+func TestLeaseResizeE2E_ReclaimClearsPendingResize(t *testing.T) {
+	s := setupStorageMarketSuite(t)
+	s.enableLeaseResize()
+
+	owner := testutil.AccAddress(t).String()
+	provider := s.createProvider(nil)
+
+	order, _ := s.createComputeDeployment(owner, s.defaultDeposit())
+	window := 24 * time.Hour
+	lid := s.bidAndLease(order, provider, &window)
+
+	_, err := s.mhandler(s.Context(), mvbeta.NewMsgResizeLease(lid, grownCompute(order.Spec), newManifestHash(t)))
+	require.NoError(t, err)
+	digest := s.pendingDigest(lid)
+
+	// the provider starts reclaiming the lease instead of answering
+	_, err = s.mhandler(s.Context(), &mvbeta.MsgLeaseStartReclaim{
+		ID:     lid,
+		Reason: mv1.LeaseClosedReasonDecommissioned,
+	})
+	require.NoError(t, err)
+
+	_, found := s.MarketKeeper().GetLeaseResize(s.Context(), lid.DeploymentID())
+	require.False(t, found)
+	smEnsureEvent(t, s.Context().EventManager().ABCIEvents(), &mv1.EventLeaseResizeCanceled{
+		ID:     lid,
+		Reason: mv1.LeaseResizeCancelReasonLeaseClosed,
+		Digest: digest,
+	})
+
+	// the request is gone, and a lease in reclamation takes no new one
+	_, err = s.mhandler(s.Context(), mvbeta.NewMsgAcceptLeaseResize(lid, uact(2), digest))
+	require.ErrorIs(t, err, mv1.ErrLeaseResizeNotFound)
+
+	_, err = s.mhandler(s.Context(), mvbeta.NewMsgResizeLease(lid, grownCompute(order.Spec), newManifestHash(t)))
+	require.ErrorIs(t, err, mv1.ErrLeaseNotActive)
+
+	group, _ := s.DeploymentKeeper().GetGroup(s.Context(), lid.GroupID())
+	require.True(t, resourcesEqual(group.GroupSpec.Resources, order.Spec.Resources), "nothing was applied")
+
+	lease, _ := s.MarketKeeper().GetLease(s.Context(), lid)
+	require.Equal(t, uact(1), lease.Price)
+}
+
+func TestLeaseResizeE2E_ComputeShrink(t *testing.T) {
+	s := setupStorageMarketSuite(t)
+	s.enableLeaseResize()
+
+	owner := testutil.AccAddress(t).String()
+	provider := s.createProvider(nil)
+
+	// a lease four times the minimum unit, at 4uact per block
+	small := smComputeSpec(t).Resources
+	spec := smComputeSpec(t)
+	spec.Resources[0].CPU.Units = rtypes.NewResourceValue(small[0].CPU.Units.Value() * 4)
+	spec.Resources[0].Memory.Quantity = rtypes.NewResourceValue(small[0].Memory.Quantity.Value() * 4)
+	spec.Resources[0].Price = uact(4)
+
+	order, _ := s.createComputeDeploymentWithSpec(owner, s.defaultDeposit(), spec)
+	lid := s.bidAndLease(order, provider, nil)
+	accID := lid.DeploymentID().ToEscrowAccountID()
+
+	h0 := s.Context().BlockHeight()
+	deposit := s.defaultDeposit().Amount.Int64()
+
+	// back down to the minimum unit, with a ceiling of 2uact per block
+	resources := order.Spec.Resources.Dup()
+	resources[0].CPU.Units = small[0].CPU.Units
+	resources[0].Memory.Quantity = small[0].Memory.Quantity
+	resources[0].Price = uact(2)
+	hash := newManifestHash(t)
+
+	s.SetBlockHeight(h0 + 100)
+	_, err := s.mhandler(s.Context(), mvbeta.NewMsgResizeLease(lid, resources, hash))
+	require.NoError(t, err)
+
+	pending, found := s.MarketKeeper().GetLeaseResize(s.Context(), lid.DeploymentID())
+	require.True(t, found)
+	require.Equal(t, uact(2), pending.MaxPrice)
+
+	s.SetBlockHeight(h0 + 150)
+	_, err = s.mhandler(s.Context(), mvbeta.NewMsgAcceptLeaseResize(lid, uact(1), pending.Digest))
+	require.NoError(t, err)
+
+	lease, _ := s.MarketKeeper().GetLease(s.Context(), lid)
+	require.Equal(t, mv1.LeaseActive, lease.State)
+	require.Equal(t, uact(1), lease.Price)
+
+	bid, _ := s.MarketKeeper().GetBid(s.Context(), lid.BidID())
+	require.Equal(t, uact(1), bid.Price)
+
+	group, _ := s.DeploymentKeeper().GetGroup(s.Context(), lid.GroupID())
+	require.True(t, resourcesEqual(group.GroupSpec.Resources, resources))
+
+	resizedOrder, _ := s.MarketKeeper().GetOrder(s.Context(), lid.OrderID())
+	require.True(t, resourcesEqual(resizedOrder.Spec.Resources, resources))
+	require.Equal(t, uact(2), resizedOrder.Price(), "the order ceiling follows the new resources")
+
+	deployment, _ := s.DeploymentKeeper().GetDeployment(s.Context(), lid.DeploymentID())
+	require.Equal(t, hash, deployment.Hash)
+
+	events := s.Context().EventManager().ABCIEvents()
+	smEnsureEvent(t, events, &mv1.EventLeaseResized{ID: lid, Price: uact(1), PrevPrice: uact(4), Digest: pending.Digest})
+
+	// the 150 blocks before the accept were charged at the old 4uact
+	funds := deposit - 150*4
+
+	acc, err := s.EscrowKeeper().GetAccount(s.Context(), accID)
+	require.NoError(t, err)
+	require.Equal(t, h0+150, acc.State.SettledAt)
+	require.Equal(t, sdkmath.LegacyNewDec(funds), acc.State.Funds[0].Amount)
+
+	smEnsureEvent(t, events, &ev1.EventAccountRunway{
+		ID:                       accID,
+		ProjectedDepletionHeight: (h0 + 150) + funds,
+	})
+
+	payment, err := s.EscrowKeeper().GetPayment(s.Context(), lid.ToEscrowPaymentID())
+	require.NoError(t, err)
+	require.Equal(t, uact(1), payment.State.Rate)
+	require.Equal(t, sdkmath.LegacyNewDec(150*4), payment.State.Balance.Amount)
+
+	// and every block after it at the new 1uact; the provider's withdraw
+	// settles those and pays out exactly what the lease earned
+	s.SetBlockHeight(h0 + 250)
+	_, err = s.mhandler(s.Context(), &mvbeta.MsgWithdrawLease{ID: lid})
+	require.NoError(t, err)
+
+	acc, err = s.EscrowKeeper().GetAccount(s.Context(), accID)
+	require.NoError(t, err)
+	require.Equal(t, sdkmath.LegacyNewDec(funds-100), acc.State.Funds[0].Amount)
+
+	payment, err = s.EscrowKeeper().GetPayment(s.Context(), lid.ToEscrowPaymentID())
+	require.NoError(t, err)
+	require.Equal(t, sdk.NewInt64Coin(sdkutil.DenomUact, 150*4+100), payment.State.Withdrawn)
+	require.True(t, payment.State.Balance.Amount.IsZero())
+}
+
+func TestLeaseResizeE2E_BucketGrow(t *testing.T) {
+	s := setupStorageMarketSuite(t)
+	s.enableVolumeOrders()
+	s.enableLeaseResize()
+
+	owner := testutil.AccAddress(t).String()
+
+	msg := s.volumeCreateMsg(owner, "media", s.defaultDeposit())
+	msg.Groups[0].Volume.Access = dv1.VolumeAccessBucket
+	msg.Groups[0].Volume.MaxAttachments = 0
+
+	lid, order := s.leaseVolume(msg, s.createProvider(smVolumeProviderAttrs()))
+	accID := lid.DeploymentID().ToEscrowAccountID()
+
+	h0 := s.Context().BlockHeight()
+	deposit := s.defaultDeposit().Amount.Int64()
+
+	resources := grownVolume(order)
+	resources[0].Price = uact(2)
+
+	// a bucket's size is not part of a manifest either
+	_, err := s.mhandler(s.Context(), mvbeta.NewMsgResizeLease(lid, resources, newManifestHash(t)))
+	require.ErrorIs(t, err, mv1.ErrInvalidLeaseResize)
+
+	s.SetBlockHeight(h0 + 10)
+	_, err = s.mhandler(s.Context(), mvbeta.NewMsgResizeLease(lid, resources, nil))
+	require.NoError(t, err)
+
+	hashBefore, _ := s.DeploymentKeeper().GetDeployment(s.Context(), lid.DeploymentID())
+	digest := s.pendingDigest(lid)
+
+	s.SetBlockHeight(h0 + 20)
+	_, err = s.mhandler(s.Context(), mvbeta.NewMsgAcceptLeaseResize(lid, uact(2), digest))
+	require.NoError(t, err)
+
+	// the bucket's quota grows and it stays a bucket
+	group, _ := s.DeploymentKeeper().GetGroup(s.Context(), lid.GroupID())
+	require.Equal(t, uint64(20*unit.Gi), group.GroupSpec.Resources[0].Storage[0].Quantity.Value())
+	require.Equal(t, order.Spec.Volume, group.GroupSpec.Volume, "the volume policy carries over")
+	require.True(t, group.GroupSpec.Volume.IsBucket())
+
+	resizedOrder, _ := s.MarketKeeper().GetOrder(s.Context(), lid.OrderID())
+	require.Equal(t, uint64(20*unit.Gi), resizedOrder.Spec.Resources[0].Storage[0].Quantity.Value())
+	require.True(t, resizedOrder.Spec.Volume.IsBucket())
+
+	hashAfter, _ := s.DeploymentKeeper().GetDeployment(s.Context(), lid.DeploymentID())
+	require.Equal(t, hashBefore.Hash, hashAfter.Hash)
+
+	lease, _ := s.MarketKeeper().GetLease(s.Context(), lid)
+	require.Equal(t, uact(2), lease.Price)
+
+	smEnsureEvent(t, s.Context().EventManager().ABCIEvents(), &mv1.EventLeaseResized{ID: lid, Price: uact(2), PrevPrice: uact(1), Digest: digest})
+
+	// 20 blocks at 1uact before the accept, 10 at 2uact after it
+	s.SetBlockHeight(h0 + 30)
+	od, err := s.EscrowKeeper().AccountSettle(s.Context(), accID)
+	require.NoError(t, err)
+	require.False(t, od)
+
+	acc, err := s.EscrowKeeper().GetAccount(s.Context(), accID)
+	require.NoError(t, err)
+	require.Equal(t, sdkmath.LegacyNewDec(deposit-20-20), acc.State.Funds[0].Amount)
+
+	// like any volume, a bucket never shrinks
+	shrink := resizedOrder.Spec.Resources.Dup()
+	shrink[0].Storage[0].Quantity = rtypes.NewResourceValue(10 * unit.Gi)
+	_, err = s.mhandler(s.Context(), mvbeta.NewMsgResizeLease(lid, shrink, nil))
+	require.ErrorIs(t, err, dv1.ErrInvalidResize)
+}

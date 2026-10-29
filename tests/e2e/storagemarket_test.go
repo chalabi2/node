@@ -264,12 +264,21 @@ func smComputeSpec(t testing.TB, refs ...dv1.VolumeRef) dvbeta.GroupSpec {
 func (s *smSuite) createComputeDeployment(owner string, amount sdk.Coin, refs ...dv1.VolumeRef) (mvbeta.Order, *dvbeta.MsgCreateDeployment) {
 	s.t.Helper()
 
+	return s.createComputeDeploymentWithSpec(owner, amount, smComputeSpec(s.t, refs...))
+}
+
+// createComputeDeploymentWithSpec drives a compute MsgCreateDeployment of the
+// given group spec through the real deployment server and returns the open
+// compute order.
+func (s *smSuite) createComputeDeploymentWithSpec(owner string, amount sdk.Coin, spec dvbeta.GroupSpec) (mvbeta.Order, *dvbeta.MsgCreateDeployment) {
+	s.t.Helper()
+
 	did := testutil.DeploymentID(s.t)
 	did.Owner = owner
 
 	msg := &dvbeta.MsgCreateDeployment{
 		ID:     did,
-		Groups: dvbeta.GroupSpecs{smComputeSpec(s.t, refs...)},
+		Groups: dvbeta.GroupSpecs{spec},
 		Deposit: deposit.Deposit{
 			Amount:  amount,
 			Sources: deposit.Sources{deposit.SourceBalance},
